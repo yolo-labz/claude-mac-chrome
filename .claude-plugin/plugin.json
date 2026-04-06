@@ -1,0 +1,27 @@
+{
+  "name": "claude-mac-chrome",
+  "version": "0.2.0",
+  "description": "Professional Chrome automation for Claude Code on macOS. Deterministic multi-profile detection via Chrome's own Local State catalog combined with email extraction from tab titles, addressing windows and tabs by their stable AppleScript string IDs instead of ordinal indices. Zero user configuration, zero dependencies, pure bash + osascript.",
+  "author": {
+    "name": "Pedro Henrique Souza Balbino",
+    "email": "pedrobalbino@proton.me",
+    "url": "https://github.com/phsb5321"
+  },
+  "homepage": "https://github.com/yolo-labz/claude-mac-chrome",
+  "repository": "https://github.com/yolo-labz/claude-mac-chrome",
+  "license": "MIT",
+  "keywords": [
+    "chrome",
+    "browser",
+    "automation",
+    "applescript",
+    "macos",
+    "multi-profile",
+    "claude-code",
+    "claude-code-plugin",
+    "stable-id",
+    "no-cdp",
+    "local-state",
+    "profile-detection"
+  ]
+}
