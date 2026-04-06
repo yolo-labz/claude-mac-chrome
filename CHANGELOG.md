@@ -5,6 +5,30 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-04-06
+
+### Added
+
+- **Same-email profile disambiguation via SNSS Sessions/Tabs URL-set overlap.** When two or more Chrome profiles share the same signed-in Google account (e.g., one email but separate profiles for Personal Shopping / Personal Dev / Personal Research), the library now parses each profile's latest `Sessions/Tabs_<id>` file (Chrome's own per-profile session snapshot) via binary `strings` extraction, then scores each candidate profile by how much the live window's tab URLs overlap with the profile's saved URL set. The profile with the highest A-coverage score wins. Ties are broken by SNSS file mtime (most recently written wins). Validated via synthetic test with three collision profiles, 100% correct routing.
+- `assignments` field in `chrome_fingerprint` output: per-window record of `{profile_dir, name, email, method, score}`. Method is one of `email_unique` (single email match), `url_overlap` (same-email disambiguation), `url_fallback` (no email signal, matched purely by URLs), or `no_signal` (couldn't assign).
+- `chrome_profile_urls <profile_dir>` CLI command — dump the SNSS-extracted URL set for a given profile, for debugging same-email routing decisions.
+- **Modern shell practices throughout:** `#!/usr/bin/env bash` shebang, `set -euo pipefail` in CLI entry point (not sourced), `[[ ]]` tests everywhere, full variable quoting, `readonly` for constants, `printf` instead of `echo` for structured output, `mktemp`-based atomic cache writes, consistent `_chrome_err` / `_chrome_warn` error reporters.
+- `scripts/lint.sh` — contributor lint runner combining shfmt format check + shellcheck (style severity) + live smoke test (catalog parse, fingerprint parse, JS round-trip). Auto-fetches shfmt and shellcheck via `nix run nixpkgs#<pkg>` if not in PATH.
+- `chrome_debug` output now shows the match method (`email (unique)` vs `URL overlap`) and confidence score for every matched window.
+
+### Changed
+
+- `chrome_fingerprint_cached` now writes the cache atomically via `mktemp` + `mv -f` to prevent corrupt reads during concurrent invocations.
+- `CHROME_CACHE` now honors `$TMPDIR` if set, falling back to `/tmp`.
+- All error output routed through `_chrome_err` with a `[chrome-lib]` prefix for easy grepping in logs.
+
+### Verified
+
+- **shellcheck clean** at `--severity=style` (stricter than the default `warning` level).
+- **shfmt clean** with the project style (`-i 2 -ci -sr`).
+- End-to-end smoke test passes on Pedro's actual 2-profile Chrome setup (`Personal` + `Study`) — email_unique path.
+- Synthetic 3-profile same-email collision test passes — url_overlap path cleanly routes each window to the correct profile with 1.000 confidence.
+
 ## [0.2.0] — 2026-04-06
 
 ### Added

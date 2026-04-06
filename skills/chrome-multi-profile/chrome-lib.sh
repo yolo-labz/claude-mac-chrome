@@ -1,5 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # chrome-lib.sh — Chrome automation using authoritative profile catalog + stable IDs
+#
+# Requires: Bash 4.0+ (for associative arrays), Python 3, macOS with Chrome.
+# Safe to source; sets strict mode only in CLI entry point.
+# shellcheck shell=bash disable=SC2016  # intentional single-quoted python/applescript
 #
 # Key techniques (empirically verified on macOS Sequoia / Chrome 146.x, April 2026):
 #
@@ -68,17 +72,26 @@
 # repository, contains no personal info the user hasn't explicitly chosen to put
 # there, and is entirely optional.
 
-CHROME_USER_DATA="${CHROME_USER_DATA_DIR:-$HOME/Library/Application Support/Google/Chrome}"
-CHROME_LOCAL_STATE="$CHROME_USER_DATA/Local State"
-CHROME_CACHE="/tmp/chrome-fingerprint.json"
-CHROME_ROLES_FILE="${CHROME_ROLES_FILE:-$HOME/.config/claude-mac-chrome/roles.json}"
+readonly CHROME_USER_DATA="${CHROME_USER_DATA_DIR:-$HOME/Library/Application Support/Google/Chrome}"
+readonly CHROME_LOCAL_STATE="$CHROME_USER_DATA/Local State"
+readonly CHROME_CACHE="${TMPDIR:-/tmp}/chrome-fingerprint.json"
+readonly CHROME_ROLES_FILE="${CHROME_ROLES_FILE:-$HOME/.config/claude-mac-chrome/roles.json}"
+
+# Emit errors to stderr with a consistent prefix.
+_chrome_err() {
+  printf '[chrome-lib] error: %s\n' "$*" >&2
+}
+
+_chrome_warn() {
+  printf '[chrome-lib] warn: %s\n' "$*" >&2
+}
 
 # ---------------------------------------------------------------------------
 # Tier 1 — Authoritative profile catalog from Chrome's own Local State file
 # ---------------------------------------------------------------------------
 # Returns JSON: {"Default":{"dir":"Default","name":"Personal","user_name":"you@example.com",...},...}
 chrome_profiles_catalog() {
-  LOCAL_STATE="$CHROME_LOCAL_STATE" python3 <<'PYEOF'
+  LOCAL_STATE="$CHROME_LOCAL_STATE" python3 << 'PYEOF'
 import json, os, sys
 p = os.environ["LOCAL_STATE"]
 if not os.path.exists(p):
@@ -112,7 +125,7 @@ PYEOF
 # Output format (tab-delimited, one row per tab):
 #   window_id \t tab_id \t title \t url
 chrome_windows_raw() {
-  osascript <<'APPLESCRIPT'
+  osascript << 'APPLESCRIPT'
 tell application "Google Chrome"
   set out to ""
   repeat with w in windows
@@ -137,33 +150,66 @@ APPLESCRIPT
 }
 
 # ---------------------------------------------------------------------------
-# Core fingerprint — combine catalog + windows → map of profile → window_id
+# Core fingerprint — multi-signal deterministic profile detection
 # ---------------------------------------------------------------------------
+# Pipeline:
+#   Step A. Read Local State catalog → list of profiles on the machine
+#   Step B. Enumerate open Chrome windows + their tabs (via AppleScript)
+#   Step C. For each window:
+#             - Extract emails from tab titles
+#             - Build candidate list of profiles whose email matches
+#   Step D. For each window, resolve the candidate list:
+#             - 0 candidates → unknown; try URL overlap against all profiles
+#             - 1 candidate → single-email match, assign directly
+#             - 2+ candidates (same-email profile collision) → disambiguate via
+#               URL overlap between the window's live tab URLs and each
+#               candidate profile's Sessions/Tabs_<latest> SNSS file
+#   Step E. On ties or empty overlap, fall back to SNSS file mtime (most
+#           recently modified profile wins for the currently-active window)
+#
 # Output JSON shape:
 #   {
-#     "by_dir":   {"Default": "100000001", "Profile 1": "100000003"},
-#     "by_name":  {"Personal | Default": "100000001", "Study | Uni": "100000003"},
-#     "by_email": {"you@gmail.com": "100000001", "you@university.edu": "100000003"},
-#     "unknown":  {"unmatched-email@x.com": "100000099"}
+#     "by_dir":     {"Default": "W1", "Profile 1": "W2", "Profile 3": "W3"},
+#     "by_name":    {"Personal": "W1", "Study": "W2", "Work": "W3"},
+#     "by_email":   {"you@gmail.com": "W1", ...},
+#     "unknown":    {"random@x.com": "W4"},
+#     "assignments": {
+#       "W1": {"profile_dir":"Default","method":"email_unique","score":null,
+#              "email":"you@gmail.com","name":"Personal"},
+#       "W2": {"profile_dir":"Profile 1","method":"url_overlap","score":0.87,
+#              "email":"you@gmail.com","name":"Personal Shopping"},
+#       ...
+#     },
+#     "catalog": {...}
 #   }
 chrome_fingerprint() {
   local catalog_json windows_raw
   catalog_json=$(chrome_profiles_catalog)
   windows_raw=$(chrome_windows_raw)
-  CATALOG="$catalog_json" RAW="$windows_raw" python3 <<'PYEOF'
+  CATALOG="$catalog_json" RAW="$windows_raw" USER_DATA="$CHROME_USER_DATA" python3 << 'PYEOF'
 import json, os, re, sys
+from collections import defaultdict
+
 catalog = json.loads(os.environ.get("CATALOG", "{}"))
 raw = os.environ.get("RAW", "")
+user_data = os.environ.get("USER_DATA", "")
 
-# Build email → profile_dir map
-email_to_dir = {v["user_name"]: k for k, v in catalog.items() if v.get("user_name")}
-
-# Parse windows_raw, collect the first plausible email in each window's tab titles.
-# Prefer emails that match the catalog exactly.
-window_emails = {}  # wid -> (email, matched_in_catalog)
 EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+')
 IGNORED_PREFIXES = ("noreply", "no-reply", "support", "info", "hello", "mailer", "notifications")
 
+# ---------------------------------------------------------------------------
+# Step A: email → [profile_dir, ...] (list, not dict, to support collisions)
+# ---------------------------------------------------------------------------
+email_to_dirs = defaultdict(list)
+for dir_name, meta in catalog.items():
+    em = meta.get("user_name") or ""
+    if em:
+        email_to_dirs[em].append(dir_name)
+
+# ---------------------------------------------------------------------------
+# Step B: parse raw windows dump → {wid: {"tabs": [{title,url,tid}], "emails": set}}
+# ---------------------------------------------------------------------------
+windows = defaultdict(lambda: {"tabs": [], "emails": set(), "urls": set()})
 for line in raw.split("\n"):
     if not line.strip():
         continue
@@ -171,44 +217,174 @@ for line in raw.split("\n"):
     if len(parts) < 4:
         continue
     wid, tid, title, url = parts
-    title_l = title.lower()
-    # Pass 1: exact catalog match (highest confidence)
-    found = None
-    for email in email_to_dir:
-        if email in title_l:
-            found = (email, True)
-            break
-    # Pass 2: any email pattern (fallback, unknown profile)
-    if not found:
-        m = EMAIL_RE.search(title)
-        if m:
-            em = m.group(0).lower()
-            if not any(em.startswith(p) for p in IGNORED_PREFIXES):
-                found = (em, em in email_to_dir)
-    if found:
-        existing = window_emails.get(wid)
-        # Upgrade unknown matches to known catalog matches if we find one later
-        if existing is None or (found[1] and not existing[1]):
-            window_emails[wid] = found
+    w = windows[wid]
+    w["tabs"].append({"tid": tid, "title": title, "url": url})
+    if url:
+        w["urls"].add(url)
+    # Extract emails from title
+    for m in EMAIL_RE.finditer(title):
+        em = m.group(0).lower()
+        if not any(em.startswith(p) for p in IGNORED_PREFIXES):
+            w["emails"].add(em)
 
+# ---------------------------------------------------------------------------
+# SNSS URL extraction — parse profile's latest Tabs_* file for open URLs
+# ---------------------------------------------------------------------------
+def extract_urls_from_file(path):
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except Exception:
+        return set()
+    urls = set()
+    # Find sequences of printable ASCII (like `strings`)
+    for chunk in re.findall(rb'[\x20-\x7e]{8,}', data):
+        try:
+            s = chunk.decode("ascii", errors="ignore")
+        except Exception:
+            continue
+        for m in re.finditer(r'https?://[^\s<>"\'\\`^{}|]+', s):
+            url = m.group(0).rstrip(',.);]')
+            if len(url) < 512:
+                urls.add(url)
+    return urls
+
+def profile_snss_urls(profile_dir):
+    sessions = os.path.join(user_data, profile_dir, "Sessions")
+    if not os.path.isdir(sessions):
+        return set(), 0
+    tabs_files = [f for f in os.listdir(sessions) if f.startswith("Tabs_")]
+    if not tabs_files:
+        return set(), 0
+    # Pick the most recently modified Tabs_ file
+    tabs_files_full = [os.path.join(sessions, f) for f in tabs_files]
+    latest = max(tabs_files_full, key=lambda p: os.path.getmtime(p))
+    mtime = os.path.getmtime(latest)
+    return extract_urls_from_file(latest), mtime
+
+# Cache SNSS URL sets (compute once per profile)
+snss_cache = {}
+def get_snss(profile_dir):
+    if profile_dir not in snss_cache:
+        snss_cache[profile_dir] = profile_snss_urls(profile_dir)
+    return snss_cache[profile_dir]
+
+# ---------------------------------------------------------------------------
+# Similarity metric
+# ---------------------------------------------------------------------------
+def url_overlap_score(window_urls, profile_urls):
+    """
+    Fraction of the window's URLs that also appear in the profile's SNSS set.
+    Range 0..1. Higher = stronger evidence this window belongs to this profile.
+    Uses A-coverage (how much of A is covered by B) because the profile's SNSS
+    URL set is typically larger than the window's live URLs (includes history).
+    """
+    if not window_urls:
+        return 0.0
+    overlap = window_urls & profile_urls
+    return len(overlap) / len(window_urls)
+
+# ---------------------------------------------------------------------------
+# Step C+D+E: assign each window to a profile
+# ---------------------------------------------------------------------------
+assignments = {}  # wid -> {profile_dir, method, score, ...}
 by_dir = {}
 by_name = {}
 by_email = {}
 unknown = {}
-for wid, (email, matched) in window_emails.items():
-    if matched and email in email_to_dir:
-        dir_name = email_to_dir[email]
-        by_dir[dir_name] = wid
-        by_name[catalog[dir_name].get("name") or dir_name] = wid
-        by_email[email] = wid
+
+for wid, w in windows.items():
+    emails = w["emails"]
+    urls = w["urls"]
+
+    # Build candidate set
+    candidates = set()
+    matched_email = None
+    for em in emails:
+        if em in email_to_dirs:
+            candidates.update(email_to_dirs[em])
+            if not matched_email:
+                matched_email = em
+
+    if len(candidates) == 1:
+        # Single unambiguous email match
+        profile_dir = next(iter(candidates))
+        meta = catalog.get(profile_dir, {})
+        assignments[wid] = {
+            "profile_dir": profile_dir,
+            "name": meta.get("name", profile_dir),
+            "email": meta.get("user_name", ""),
+            "method": "email_unique",
+            "score": None,
+        }
+        continue
+
+    if not candidates:
+        # No email match — the window might have no Google tab, or the email
+        # doesn't exist in Local State catalog. Try URL overlap against ALL
+        # profiles in the catalog as a last-resort disambiguation.
+        candidates = set(catalog.keys())
+        method = "url_fallback"
+        # Also record any raw email for the unknown bucket
+        for em in emails:
+            unknown[em] = wid
     else:
-        unknown[email] = wid
+        # 2+ candidates → same-email collision, disambiguate via URL overlap
+        method = "url_overlap"
+
+    # Score each candidate by URL overlap with its SNSS file
+    scored = []
+    for pd in candidates:
+        snss_urls, mtime = get_snss(pd)
+        score = url_overlap_score(urls, snss_urls)
+        scored.append((pd, score, mtime))
+
+    # Sort by score descending, then by mtime descending (most recent wins ties)
+    scored.sort(key=lambda t: (t[1], t[2]), reverse=True)
+    best_pd, best_score, best_mtime = scored[0]
+
+    if best_score == 0 and method == "url_fallback":
+        # No signal at all — can't assign this window to any profile
+        assignments[wid] = {
+            "profile_dir": None,
+            "name": None,
+            "email": (next(iter(emails)) if emails else ""),
+            "method": "no_signal",
+            "score": 0.0,
+        }
+        continue
+
+    meta = catalog.get(best_pd, {})
+    assignments[wid] = {
+        "profile_dir": best_pd,
+        "name": meta.get("name", best_pd),
+        "email": meta.get("user_name", ""),
+        "method": method,
+        "score": round(best_score, 3),
+    }
+
+# ---------------------------------------------------------------------------
+# Build multi-index maps from the assignments
+# ---------------------------------------------------------------------------
+for wid, a in assignments.items():
+    pd = a.get("profile_dir")
+    if not pd:
+        continue
+    meta = catalog.get(pd, {})
+    by_dir[pd] = wid
+    name = meta.get("name", "")
+    if name:
+        by_name[name] = wid
+    em = meta.get("user_name", "")
+    if em:
+        by_email[em] = wid
 
 result = {
     "by_dir": by_dir,
     "by_name": by_name,
     "by_email": by_email,
     "unknown": unknown,
+    "assignments": assignments,
     "catalog": catalog,
 }
 print(json.dumps(result, ensure_ascii=False))
@@ -220,36 +396,50 @@ PYEOF
 # ---------------------------------------------------------------------------
 chrome_fingerprint_cached() {
   local need_refresh=0
-  if [ ! -s "$CHROME_CACHE" ]; then
+
+  if [[ ! -s "$CHROME_CACHE" ]]; then
     need_refresh=1
   else
     local sample_id
-    sample_id=$(python3 -c "
-import json, sys
+    sample_id=$(CHROME_CACHE_PATH="$CHROME_CACHE" python3 -c '
+import json, os, sys
 try:
-    d = json.load(open('$CHROME_CACHE'))
-    # pick any window id from by_dir/by_name/by_email
-    for k in ('by_dir','by_name','by_email'):
+    with open(os.environ["CHROME_CACHE_PATH"]) as f:
+        d = json.load(f)
+    for k in ("by_dir", "by_name", "by_email"):
         vs = list(d.get(k, {}).values())
         if vs:
-            print(vs[0]); break
-except: pass
-" 2>/dev/null)
-    if [ -n "$sample_id" ]; then
+            print(vs[0])
+            break
+except Exception:
+    pass
+' 2> /dev/null)
+
+    if [[ -n "$sample_id" ]]; then
       local alive
       alive=$(osascript -e "tell application \"Google Chrome\" to try
 return (exists (window id \"$sample_id\"))
 on error
 return false
-end try" 2>/dev/null)
-      [ "$alive" != "true" ] && need_refresh=1
+end try" 2> /dev/null)
+      [[ "$alive" != "true" ]] && need_refresh=1
     else
       need_refresh=1
     fi
   fi
-  if [ "$need_refresh" = "1" ]; then
-    chrome_fingerprint > "$CHROME_CACHE"
+
+  if [[ "$need_refresh" == "1" ]]; then
+    local tmp
+    tmp=$(mktemp -t chrome-fingerprint.XXXXXX)
+    if chrome_fingerprint > "$tmp"; then
+      mv -f "$tmp" "$CHROME_CACHE"
+    else
+      rm -f "$tmp"
+      _chrome_err "failed to refresh fingerprint cache"
+      return 1
+    fi
   fi
+
   cat "$CHROME_CACHE"
 }
 
@@ -266,7 +456,7 @@ chrome_window_for() {
   local ref="$1"
   local fp
   fp=$(chrome_fingerprint_cached)
-  CHROME_REF="$ref" CHROME_ROLES="$CHROME_ROLES_FILE" python3 - "$fp" <<'PYEOF'
+  CHROME_REF="$ref" CHROME_ROLES="$CHROME_ROLES_FILE" python3 - "$fp" << 'PYEOF'
 import json, os, sys
 fp = json.loads(sys.argv[1])
 ref = os.environ.get("CHROME_REF", "")
@@ -324,8 +514,15 @@ PYEOF
 # ---------------------------------------------------------------------------
 chrome_tab_for_url() {
   local win="$1" pattern="$2"
-  [ -z "$win" ] && return 1
-  osascript <<APPLESCRIPT
+  [[ -z "$win" ]] && {
+    _chrome_err "chrome_tab_for_url: window id required"
+    return 1
+  }
+  [[ -z "$pattern" ]] && {
+    _chrome_err "chrome_tab_for_url: url substring required"
+    return 1
+  }
+  osascript << APPLESCRIPT
 tell application "Google Chrome"
   try
     repeat with t in tabs of window id "$win"
@@ -359,7 +556,7 @@ chrome_navigate() {
 # ---------------------------------------------------------------------------
 chrome_new_tab() {
   local win="$1" url="$2"
-  osascript <<APPLESCRIPT
+  osascript << APPLESCRIPT
 tell application "Google Chrome"
   set newTab to make new tab at end of tabs of window id "$win" with properties {URL:"$url"}
   return id of newTab
@@ -376,7 +573,7 @@ chrome_tab_url() {
 }
 
 # ---------------------------------------------------------------------------
-# Human-readable diagnostic
+# Human-readable diagnostic with match method + confidence
 # ---------------------------------------------------------------------------
 chrome_debug() {
   local fp
@@ -385,53 +582,119 @@ chrome_debug() {
 import sys, json
 fp = json.load(sys.stdin)
 catalog = fp.get('catalog', {})
-by_dir = fp.get('by_dir', {})
+assignments = fp.get('assignments', {})
 unknown = fp.get('unknown', {})
+
+method_label = {
+    'email_unique':  'email (unique)',
+    'url_overlap':   'URL overlap (same-email disambiguation)',
+    'url_fallback':  'URL overlap (no email signal)',
+    'no_signal':     '(unassigned)',
+}
 
 print()
 print('Profile catalog (from Chrome Local State):')
 for dir_name, meta in catalog.items():
     email = meta.get('user_name','') or '(no Google account)'
     name = meta.get('name','') or dir_name
-    print(f'  [{dir_name:12s}] {name:30s} {email}')
+    ephemeral = ' [ephemeral]' if meta.get('is_ephemeral') else ''
+    print(f'  [{dir_name:12s}] {name:30s} {email}{ephemeral}')
 
 print()
 print('Matched windows:')
-if not by_dir:
-    print('  (no windows matched — profiles may have no Google tabs open)')
-for dir_name, wid in by_dir.items():
-    meta = catalog.get(dir_name, {})
-    name = meta.get('name','') or dir_name
-    email = meta.get('user_name','')
-    print(f'  win id={wid:12s}  {dir_name:12s}  {name:30s}  {email}')
+if not assignments:
+    print('  (no windows matched — Chrome may not be running, or all windows have no signal)')
+for wid, a in assignments.items():
+    pd = a.get('profile_dir') or '?'
+    name = a.get('name') or pd
+    email = a.get('email','')
+    method = method_label.get(a.get('method'), a.get('method','?'))
+    score = a.get('score')
+    score_str = f'  conf={score:.2f}' if score is not None else ''
+    print(f'  win id={wid:12s}  {pd:12s}  {name:30s}  {email:30s}  [{method}]{score_str}')
 
 if unknown:
     print()
-    print('Unknown (email not in catalog — possibly Proton/Fastmail/other):')
+    print('Unknown emails (not in catalog — Proton/Fastmail/external):')
     for email, wid in unknown.items():
         print(f'  win id={wid:12s}  {email}')
 "
 }
 
 # ---------------------------------------------------------------------------
+# chrome_profile_urls <profile_dir>
+# Dump the URL set that the library sees for a given profile by parsing the
+# profile's latest Sessions/Tabs_* SNSS file. Useful for debugging same-email
+# disambiguation ('why did window X get assigned to profile Y?').
+# ---------------------------------------------------------------------------
+chrome_profile_urls() {
+  local profile_dir="$1"
+  [[ -z "$profile_dir" ]] && {
+    _chrome_err "usage: chrome_profile_urls <profile_dir>"
+    return 1
+  }
+  USER_DATA="$CHROME_USER_DATA" PROFILE_DIR="$profile_dir" python3 << 'PYEOF'
+import os, re, sys
+user_data = os.environ["USER_DATA"]
+profile = os.environ["PROFILE_DIR"]
+sessions = os.path.join(user_data, profile, "Sessions")
+if not os.path.isdir(sessions):
+    sys.stderr.write(f"error: {sessions} does not exist\n")
+    sys.exit(1)
+tabs_files = [f for f in os.listdir(sessions) if f.startswith("Tabs_")]
+if not tabs_files:
+    sys.stderr.write(f"error: no Tabs_* files in {sessions}\n")
+    sys.exit(1)
+tabs_files_full = [os.path.join(sessions, f) for f in tabs_files]
+latest = max(tabs_files_full, key=lambda p: os.path.getmtime(p))
+sys.stderr.write(f"# reading {os.path.basename(latest)} (mtime {int(os.path.getmtime(latest))})\n")
+with open(latest, "rb") as f:
+    data = f.read()
+urls = set()
+for chunk in re.findall(rb'[\x20-\x7e]{8,}', data):
+    s = chunk.decode("ascii", errors="ignore")
+    for m in re.finditer(r'https?://[^\s<>"\'\\`^{}|]+', s):
+        url = m.group(0).rstrip(',.);]')
+        if len(url) < 512:
+            urls.add(url)
+for u in sorted(urls):
+    print(u)
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-  cmd="$1"; shift
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  # Strict mode only in CLI — sourcing shouldn't impose it on the caller.
+  set -euo pipefail
+  IFS=$'\n\t'
+
+  if [[ $# -lt 1 ]]; then
+    cmd=""
+  else
+    cmd="$1"
+    shift
+  fi
+
   case "$cmd" in
-    catalog)       chrome_profiles_catalog ;;
-    fingerprint)   chrome_fingerprint ;;
-    cached)        chrome_fingerprint_cached ;;
-    window_for)    chrome_window_for "$@" ;;
-    tab_for_url)   chrome_tab_for_url "$@" ;;
-    js)            chrome_js "$@" ;;
-    navigate)      chrome_navigate "$@" ;;
-    new_tab)       chrome_new_tab "$@" ;;
-    tab_url)       chrome_tab_url "$@" ;;
-    debug)         chrome_debug ;;
-    refresh)       rm -f "$CHROME_CACHE"; chrome_fingerprint_cached ;;
+    catalog) chrome_profiles_catalog ;;
+    fingerprint) chrome_fingerprint ;;
+    cached) chrome_fingerprint_cached ;;
+    window_for) chrome_window_for "$@" ;;
+    tab_for_url) chrome_tab_for_url "$@" ;;
+    js) chrome_js "$@" ;;
+    navigate) chrome_navigate "$@" ;;
+    new_tab) chrome_new_tab "$@" ;;
+    tab_url) chrome_tab_url "$@" ;;
+    debug) chrome_debug ;;
+    profile_urls) chrome_profile_urls "$@" ;;
+    refresh)
+      rm -f "$CHROME_CACHE"
+      chrome_fingerprint_cached
+      ;;
     *)
-      cat >&2 <<USAGE
+      cat >&2 << USAGE
 chrome-lib.sh — professional Chrome automation for macOS multi-profile setups
 
 CLI:
@@ -444,7 +707,8 @@ CLI:
   chrome-lib.sh navigate <win> <tab> <url>
   chrome-lib.sh new_tab <win> <url>     # returns new tab's stable ID
   chrome-lib.sh tab_url <win> <tab>
-  chrome-lib.sh debug                   # human-readable diagnostic
+  chrome-lib.sh debug                   # human-readable diagnostic with match method + confidence
+  chrome-lib.sh profile_urls <profile>  # dump SNSS-extracted URL set for a profile (debugging)
   chrome-lib.sh refresh                 # force cache refresh
 
 Environment:
