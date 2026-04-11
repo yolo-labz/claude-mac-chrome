@@ -1,0 +1,18 @@
+<!--
+  target_rail: inert_container
+  isolation_proof: Button text "Mark as read" is benign (NOT in lexicon).
+    Button lives inside a <dialog> without an `open` attribute. Safety
+    check's closest("dialog:not([open])") MUST fire before visibility check.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 06 — inert ancestor</title></head>
+  <body>
+    <dialog>
+      <form>
+        <button id="target">Mark as read</button>
+      </form>
+    </dialog>
+  </body>
+</html>

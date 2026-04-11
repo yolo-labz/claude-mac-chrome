@@ -1,0 +1,7 @@
+{
+  "pseudo_elements": {
+    "#target": {
+      "::before": { "content": "\"Subscribe\"" }
+    }
+  }
+}

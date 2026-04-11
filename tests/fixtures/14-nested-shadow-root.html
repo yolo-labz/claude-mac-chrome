@@ -1,0 +1,24 @@
+<!--
+  target_rail: purchase_button_text_depth_0 (via nested shadowRoot)
+  isolation_proof: Shadow root inside shadow root, target button at
+    depth 2. gatherAllText's recursion must descend through multiple
+    open shadow roots. Caps at depth 10 to prevent infinite loops.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 14 — nested shadow roots</title></head>
+  <body>
+    <div id="outer-host"></div>
+    <script>
+      const outer = document.getElementById("outer-host").attachShadow({ mode: "open" });
+      const innerHost = document.createElement("div");
+      outer.appendChild(innerHost);
+      const inner = innerHost.attachShadow({ mode: "open" });
+      const btn = document.createElement("button");
+      btn.id = "target";
+      btn.textContent = "Upgrade";
+      inner.appendChild(btn);
+    </script>
+  </body>
+</html>

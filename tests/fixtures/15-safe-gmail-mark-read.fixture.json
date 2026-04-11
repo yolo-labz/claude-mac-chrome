@@ -1,0 +1,8 @@
+{
+  "rects": {
+    "#target": { "x": 20, "y": 60, "width": 120, "height": 32, "top": 60, "left": 20, "right": 140, "bottom": 92 }
+  },
+  "hit_test": {
+    "140,75": "#target"
+  }
+}

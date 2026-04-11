@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "element_found": true,
+  "blocked_reason": "clickjack_suspected",
+  "evidence": {
+    "hit_target_id": "overlay",
+    "intended_target_id": "target"
+  },
+  "fired_rail_trace": ["element_lookup", "ancestor_text_walk", "payment_field_lock", "inert_container", "visibility", "zero_dimensions", "hit_test"],
+  "selector": "#target",
+  "harness_requirement": "integration_only",
+  "note": "Happy-dom placeholder result must be ignored; Playwright is authoritative."
+}

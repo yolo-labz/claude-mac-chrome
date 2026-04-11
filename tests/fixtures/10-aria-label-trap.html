@@ -1,0 +1,14 @@
+<!--
+  target_rail: purchase_button_attr_aria-label_depth_0
+  isolation_proof: Button textContent is benign ("OK"). aria-label
+    attribute contains "Purchase Now" which matches the lexicon. The
+    attribute-walk rail MUST fire before any visibility rail.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 10 — aria-label trap</title></head>
+  <body>
+    <button id="target" aria-label="Purchase Now">OK</button>
+  </body>
+</html>

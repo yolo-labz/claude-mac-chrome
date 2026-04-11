@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "element_found": true,
+  "blocked_reason": null,
+  "element_text": "Mark as read",
+  "fired_rail_trace": ["element_lookup", "ancestor_text_walk", "payment_field_lock", "inert_container", "visibility", "zero_dimensions"],
+  "selector": "#target",
+  "sentinel_observed": true,
+  "note": "sentinel_observed is asserted by Playwright dispatch spec T053, not by happy-dom run."
+}

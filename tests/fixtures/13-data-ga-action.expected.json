@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "element_found": true,
+  "blocked_reason": "purchase_button_attr_data-action_depth_0",
+  "evidence": {
+    "match_attr": "data-action",
+    "match_text": "Subscribe",
+    "match_depth": 0
+  },
+  "fired_rail_trace": ["element_lookup", "ancestor_text_walk"],
+  "selector": "#target"
+}

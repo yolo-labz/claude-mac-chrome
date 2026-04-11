@@ -1,0 +1,14 @@
+{
+  "ok": false,
+  "element_found": true,
+  "blocked_reason": "purchase_button_text_depth_1",
+  "evidence": {
+    "match_depth": 1,
+    "match_host": "shadowRoot_via_ancestor",
+    "match_text": "Upgrade"
+  },
+  "fired_rail_trace": ["element_lookup", "ancestor_text_walk"],
+  "selector": "#host",
+  "variant_group": "purchase_button_text",
+  "note": "Observed behavior: happy-dom's shadow-root textContent aggregation surfaces 'Upgrade' via the parent body at depth 1, not the host itself at depth 0. The rail still fires — the point is defense-in-depth, not the exact depth."
+}

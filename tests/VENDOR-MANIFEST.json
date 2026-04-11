@@ -1,0 +1,29 @@
+{
+  "_description": "Vendored dependency manifest. Per spec §NFR-V2-VEND-1. Populated when happy-dom bundle is first produced. Refresh via scripts/verify-vendor.sh.",
+  "vendored": {
+    "happy-dom": {
+      "upstream_repo": "https://github.com/capricorn86/happy-dom",
+      "upstream_version": "15.11.7",
+      "upstream_commit": "UNSET_REQUIRES_GIT_LOOKUP",
+      "upstream_tarball_sha256": "UNSET_REQUIRES_NPM_REGISTRY_LOOKUP",
+      "bundle_path": "tests/vendor/happy-dom.mjs",
+      "bundle_sha256": "9be010d88b28fe2943b536acd13dd7e9d86cb993e9cf11b8ac8b6a4c6e36af2a",
+      "bundle_size_bytes": 1636313,
+      "bundled_at": "2026-04-11",
+      "esbuild_version": "0.28.0",
+      "node_version": "v24.14.0",
+      "source_date_epoch": "1700000000",
+      "bundle_command": "SOURCE_DATE_EPOCH=1700000000 npx esbuild --bundle node_modules/happy-dom/lib/index.js --format=esm --platform=node --target=es2022 --minify=false --outfile=tests/vendor/happy-dom.mjs",
+      "min_version_rationale": "happy-dom 15.x resolves GH issues #312 (composed event bubbling), #394/#659/#1113 (MutationObserver), #1529 (event target null after stopPropagation), #1766 (Lit event handling). See spec §NFR-V2-SAFETY-4.",
+      "known_fidelity_gaps": [
+        "elementFromPoint: no layout engine — integration-only (NFR-V2-SAFETY-1)",
+        "getBoundingClientRect: returns {0,0,0,0} — requires harness stub (NFR-V2-SAFETY-2)",
+        "getComputedStyle(el, pseudoElt).content: ignores pseudoElt arg (GH #1773) — requires harness stub (NFR-V2-SAFETY-3)",
+        "HTMLDialogElement.showModal inert propagation: not emulated",
+        "document.visibilityState: static 'visible' (accepted caveat — AppleScript only injects into focused tabs)"
+      ]
+    }
+  },
+  "schema_version": 1,
+  "manifest_last_updated": "2026-04-11"
+}

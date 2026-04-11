@@ -1,0 +1,14 @@
+<!--
+  target_rail: purchase_button_attr_data-action_depth_0
+  isolation_proof: Button text benign. `data-action="Subscribe"` attribute
+    matches lexicon via attr-walk. Tests that the exhaustive attr list
+    includes `data-action` (NFR-SR-V2-10).
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 13 — data-action attribute trap</title></head>
+  <body>
+    <button id="target" data-action="Subscribe">Continue</button>
+  </body>
+</html>

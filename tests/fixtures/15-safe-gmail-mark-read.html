@@ -1,0 +1,25 @@
+<!--
+  target_rail: NONE — POSITIVE CASE (NFR-V2-FX-5)
+  isolation_proof: Gmail-style "Mark as read" button. Benign text, no
+    payment fields, no inert ancestors, normal dimensions, no clickjack.
+    Safety check MUST return ok:true. A real click listener flips
+    window.__cmc_sentinel_clicked so the dispatch integration test can
+    assert that the event actually fired.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 15 — safe Gmail mark-read</title></head>
+  <body>
+    <h1>Inbox</h1>
+    <div role="toolbar">
+      <button id="target">Mark as read</button>
+    </div>
+    <script>
+      window.__cmc_sentinel_clicked = false;
+      document.getElementById("target").addEventListener("click", function() {
+        window.__cmc_sentinel_clicked = true;
+      });
+    </script>
+  </body>
+</html>

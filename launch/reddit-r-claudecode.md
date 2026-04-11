@@ -90,7 +90,7 @@ chrome_js "$WIN" "$TAB" "document.title"
 
 ## Source
 
-https://github.com/yolo-labz/claude-mac-chrome — MIT license, 0.3.0
+https://github.com/yolo-labz/claude-mac-chrome — MIT license, v1.0.0-rc1
 
 Happy to answer questions or take PRs. The same-email SNSS approach was the part I was most uncertain about until I built the synthetic test — turned out clean.
 ```

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Mock osascript for bats test suite. Per spec §NFR-TEST-6.
+#
+# Logs every invocation (including all args) to $BATS_TMPDIR/osascript.log
+# so tests can assert "chrome_window_for called osascript with the right
+# AppleScript snippet". Echoes canned JSON responses based on dispatch.
+#
+# Used by prepending $BATS_TMPDIR/mockbin to PATH in bats setup().
+#
+# Never forwards to real osascript. If a test accidentally invokes real
+# Chrome, the log will be empty and the test should fail on that signal.
+
+set -euo pipefail
+
+log_file="${BATS_TMPDIR:-/tmp}/osascript.log"
+{
+  printf '=== invocation at %s ===\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'argc=%d\n' "$#"
+  for arg in "$@"; do
+    printf 'arg: %s\n' "$arg"
+  done
+  printf '\n'
+} >> "$log_file"
+
+# Canned responses — simplest useful set. Tests that need more specific
+# responses can overwrite $BATS_TMPDIR/mockbin/osascript with a custom
+# script in their setup().
+
+# Detect the verb by scanning args for common patterns
+script=""
+for arg in "$@"; do
+  if [[ "$arg" == *"tell application"* ]]; then
+    script="$arg"
+    break
+  fi
+done
+
+# Match on what the script is doing and return a plausible canned value
+case "$script" in
+  *"id of window"*|*"every window"*)
+    # Return a fake window ID list
+    printf '%s\n' "817908070"
+    ;;
+  *"id of tab"*|*"every tab"*)
+    # Return a fake tab ID list
+    printf '%s\n' "817908941"
+    ;;
+  *"URL of tab"*|*"URL of active tab"*)
+    # Return a benign URL that should pass blocklist checks
+    printf '%s\n' "https://example.com/"
+    ;;
+  *"title of tab"*|*"title of active tab"*)
+    printf '%s\n' "Example Domain"
+    ;;
+  *"execute"*"javascript"*)
+    # JS eval — return a trivial JSON envelope
+    printf '%s\n' '{"ok":true,"mock":true}'
+    ;;
+  *"make new tab"*)
+    printf '%s\n' "817908999"
+    ;;
+  *)
+    # Unknown script — return empty so tests can detect unexpected calls
+    printf '%s\n' ""
+    ;;
+esac
+exit 0

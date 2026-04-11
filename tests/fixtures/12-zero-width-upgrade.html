@@ -1,0 +1,14 @@
+<!--
+  target_rail: purchase_button_text_depth_0 (via zero-width strip)
+  isolation_proof: Button text "Up​grade" contains U+200B ZERO WIDTH SPACE
+    between 'p' and 'g'. Regex on raw text would miss; NFKC normalize +
+    zero-width strip MUST catch it.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 12 — zero-width upgrade</title></head>
+  <body>
+    <button id="target">Up&#8203;grade</button>
+  </body>
+</html>

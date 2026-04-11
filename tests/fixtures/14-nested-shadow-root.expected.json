@@ -1,0 +1,14 @@
+{
+  "ok": false,
+  "element_found": true,
+  "blocked_reason": "purchase_button_text_depth_1",
+  "evidence": {
+    "match_depth": 1,
+    "match_host": "shadowRoot[2]_via_ancestor",
+    "match_text": "Upgrade"
+  },
+  "fired_rail_trace": ["element_lookup", "ancestor_text_walk"],
+  "selector": "#outer-host",
+  "variant_group": "purchase_button_text",
+  "note": "Nested shadow root text surfaces via parent body at depth 1, same observed behavior pattern as fixture 04."
+}

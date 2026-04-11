@@ -1,0 +1,17 @@
+{
+  "ok": false,
+  "element_found": true,
+  "blocked_reason": "purchase_button_text_depth_0",
+  "evidence": {
+    "match_depth": 0,
+    "match_host": "pseudo::before",
+    "match_text": "Subscribe"
+  },
+  "fired_rail_trace": [
+    "element_lookup",
+    "ancestor_text_walk"
+  ],
+  "selector": "#target",
+  "harness_requirement": "stubbed_pseudo_element",
+  "variant_group": "purchase_button_text"
+}

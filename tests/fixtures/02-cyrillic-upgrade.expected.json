@@ -1,0 +1,15 @@
+{
+  "ok": false,
+  "element_found": true,
+  "blocked_reason": "purchase_button_text_depth_2",
+  "evidence": {
+    "match_depth": 2,
+    "match_host": "light_dom_ancestor",
+    "match_text": "Uрgrade",
+    "confusables_normalized": false
+  },
+  "fired_rail_trace": ["element_lookup", "ancestor_text_walk"],
+  "selector": "#target",
+  "variant_group": "purchase_button_text",
+  "note": "NFKC does NOT fold Cyrillic 'р' (U+0440) to Latin 'p'. The current v0.8.0 rail catches this via ancestor text aggregation at depth 2 (body level). Full UTS #39 confusables fold would catch at depth 0 — deferred to v0.8.1."
+}

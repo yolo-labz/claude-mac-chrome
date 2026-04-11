@@ -1,0 +1,50 @@
+name: Parity canary
+
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: macos-15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "20.18.1"
+      - name: Run happy-dom harness
+        run: node tests/js-fixtures/run.mjs > /tmp/happy-dom.json
+      - name: Run Playwright on same fixtures
+        working-directory: tests/integration
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test --grep "parity" --reporter=json > /tmp/playwright.json
+      - name: Diff envelopes
+        run: node tests/js-fixtures/parity-diff.mjs /tmp/happy-dom.json /tmp/playwright.json
+      - name: File P1 on divergence
+        if: failure()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        with:
+          script: |
+            const runId = process.env.RUN_ID;
+            const repoUrl = process.env.REPO_URL;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '[parity-canary] P1 — happy-dom diverged from real Chromium',
+              body: `Run: ${repoUrl}/actions/runs/${runId}\n\n**Action required:** Review HAPPY-DOM-FIDELITY.md. A stubbed API may need to be upgraded to integration-only.`,
+              labels: ['parity', 'p1', 'security']
+            });

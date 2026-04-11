@@ -1,0 +1,17 @@
+# Feature 006 T075 — Scorecard configuration.
+# Per spec §NFR-V2-SCORE-1.
+#
+# Documents explicit waivers where Scorecard checks are not applicable
+# to this project's structure. Scorecard validates this file via
+# .github/workflows/scorecard.yml.
+
+# Solo maintainer project — Code-Review check cannot pass without team
+# reviewers. Voluntarily annotate that self-reviews are acceptable for
+# docs/fixture-only PRs; safety-critical PRs still require CODEOWNERS
+# sign-off (which points to the same maintainer but preserves the audit
+# trail).
+annotations:
+  - checks: ["Code-Review"]
+    reasons:
+      - reason: "maintainer-annotation"
+        message: "Solo maintainer project. Safety-critical changes reviewed via CODEOWNERS audit trail; docs/fixture-only changes self-reviewed."

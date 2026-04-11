@@ -91,32 +91,31 @@ _chrome_warn() {
 # ---------------------------------------------------------------------------
 # Returns JSON: {"Default":{"dir":"Default","name":"Personal","user_name":"you@example.com",...},...}
 chrome_profiles_catalog() {
-  LOCAL_STATE="$CHROME_LOCAL_STATE" python3 << 'PYEOF'
-import json, os, sys
-p = os.environ["LOCAL_STATE"]
-if not os.path.exists(p):
-    sys.stderr.write(f"error: Chrome Local State not found at {p}\n")
-    print("{}")
-    sys.exit(0)
-try:
-    with open(p) as f:
-        d = json.load(f)
-except Exception as e:
-    sys.stderr.write(f"error: failed to parse Local State: {e}\n")
-    print("{}")
-    sys.exit(0)
-info = d.get("profile", {}).get("info_cache", {})
-out = {}
-for dir_name, meta in info.items():
-    out[dir_name] = {
-        "dir": dir_name,
-        "name": meta.get("name", "") or dir_name,
-        "user_name": (meta.get("user_name") or "").lower(),
-        "gaia_name": meta.get("gaia_name", "") or "",
-        "is_ephemeral": bool(meta.get("is_ephemeral", False)),
-    }
-print(json.dumps(out, ensure_ascii=False))
-PYEOF
+  if [[ ! -f "$CHROME_LOCAL_STATE" ]]; then
+    _chrome_err "Chrome Local State not found at $CHROME_LOCAL_STATE"
+    printf '{}'
+    return 0
+  fi
+  if ! command -v jq > /dev/null 2>&1; then
+    _chrome_err "jq is required but not found. Install via: brew install jq"
+    printf '{}'
+    return 1
+  fi
+  jq -r '
+    (.profile.info_cache // {}) | to_entries | map({
+      key: .key,
+      value: {
+        dir: .key,
+        name: (if (.value.name // "") == "" then .key else .value.name end),
+        user_name: ((.value.user_name // "") | ascii_downcase),
+        gaia_name: (.value.gaia_name // ""),
+        is_ephemeral: (if .value.is_ephemeral then true else false end)
+      }
+    }) | from_entries
+  ' "$CHROME_LOCAL_STATE" 2> /dev/null || {
+    _chrome_err "failed to parse Local State"
+    printf '{}'
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -186,209 +185,124 @@ chrome_fingerprint() {
   local catalog_json windows_raw
   catalog_json=$(chrome_profiles_catalog)
   windows_raw=$(chrome_windows_raw)
-  CATALOG="$catalog_json" RAW="$windows_raw" USER_DATA="$CHROME_USER_DATA" python3 << 'PYEOF'
-import json, os, re, sys
-from collections import defaultdict
 
-catalog = json.loads(os.environ.get("CATALOG", "{}"))
-raw = os.environ.get("RAW", "")
-user_data = os.environ.get("USER_DATA", "")
+  if ! command -v jq > /dev/null 2>&1; then
+    _chrome_err "jq is required but not found. Install via: brew install jq"
+    return 1
+  fi
 
-EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+')
-IGNORED_PREFIXES = ("noreply", "no-reply", "support", "info", "hello", "mailer", "notifications")
+  # Step A: build email → [profile_dirs] mapping from catalog
+  local email_to_dirs
+  email_to_dirs=$(printf '%s' "$catalog_json" | jq -r '
+    [to_entries[] | select(.value.user_name != "") |
+     {email: .value.user_name, dir: .key}] |
+    group_by(.email) |
+    map({key: .[0].email, value: [.[].dir]}) |
+    from_entries
+  ')
 
-# ---------------------------------------------------------------------------
-# Step A: email → [profile_dir, ...] (list, not dict, to support collisions)
-# ---------------------------------------------------------------------------
-email_to_dirs = defaultdict(list)
-for dir_name, meta in catalog.items():
-    em = meta.get("user_name") or ""
-    if em:
-        email_to_dirs[em].append(dir_name)
+  # Step B: parse raw windows dump, extract emails from tab titles
+  local assignments_json="{}"
+  local by_dir="{}" by_name="{}" by_email="{}" unknown="{}"
+  local wid matched_dir matched_email method
 
-# ---------------------------------------------------------------------------
-# Step B: parse raw windows dump → {wid: {"tabs": [{title,url,tid}], "emails": set}}
-# ---------------------------------------------------------------------------
-windows = defaultdict(lambda: {"tabs": [], "emails": set(), "urls": set()})
-for line in raw.split("\n"):
-    if not line.strip():
-        continue
-    parts = line.split("\t", 3)
-    if len(parts) < 4:
-        continue
-    wid, tid, title, url = parts
-    w = windows[wid]
-    w["tabs"].append({"tid": tid, "title": title, "url": url})
-    if url:
-        w["urls"].add(url)
-    # Extract emails from title
-    for m in EMAIL_RE.finditer(title):
-        em = m.group(0).lower()
-        if not any(em.startswith(p) for p in IGNORED_PREFIXES):
-            w["emails"].add(em)
+  # Collect unique window IDs
+  local window_ids
+  window_ids=$(printf '%s' "$windows_raw" | cut -f1 | sort -u)
 
-# ---------------------------------------------------------------------------
-# SNSS URL extraction — parse profile's latest Tabs_* file for open URLs
-# ---------------------------------------------------------------------------
-def extract_urls_from_file(path):
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-    except Exception:
-        return set()
-    urls = set()
-    # Find sequences of printable ASCII (like `strings`)
-    for chunk in re.findall(rb'[\x20-\x7e]{8,}', data):
-        try:
-            s = chunk.decode("ascii", errors="ignore")
-        except Exception:
-            continue
-        for m in re.finditer(r'https?://[^\s<>"\'\\`^{}|]+', s):
-            url = m.group(0).rstrip(',.);]')
-            if len(url) < 512:
-                urls.add(url)
-    return urls
+  if [[ -z "$window_ids" ]]; then
+    # No windows found
+    jq -n --argjson catalog "$catalog_json" '{
+      by_dir: {}, by_name: {}, by_email: {},
+      unknown: {}, assignments: {}, catalog: $catalog
+    }'
+    return 0
+  fi
 
-def profile_snss_urls(profile_dir):
-    sessions = os.path.join(user_data, profile_dir, "Sessions")
-    if not os.path.isdir(sessions):
-        return set(), 0
-    tabs_files = [f for f in os.listdir(sessions) if f.startswith("Tabs_")]
-    if not tabs_files:
-        return set(), 0
-    # Pick the most recently modified Tabs_ file
-    tabs_files_full = [os.path.join(sessions, f) for f in tabs_files]
-    latest = max(tabs_files_full, key=lambda p: os.path.getmtime(p))
-    mtime = os.path.getmtime(latest)
-    return extract_urls_from_file(latest), mtime
+  local -a wid_array
+  mapfile -t wid_array <<< "$window_ids"
 
-# Cache SNSS URL sets (compute once per profile)
-snss_cache = {}
-def get_snss(profile_dir):
-    if profile_dir not in snss_cache:
-        snss_cache[profile_dir] = profile_snss_urls(profile_dir)
-    return snss_cache[profile_dir]
+  local wid
+  for wid in "${wid_array[@]}"; do
+    [[ -z "$wid" ]] && continue
 
-# ---------------------------------------------------------------------------
-# Similarity metric
-# ---------------------------------------------------------------------------
-def url_overlap_score(window_urls, profile_urls):
-    """
-    Fraction of the window's URLs that also appear in the profile's SNSS set.
-    Range 0..1. Higher = stronger evidence this window belongs to this profile.
-    Uses A-coverage (how much of A is covered by B) because the profile's SNSS
-    URL set is typically larger than the window's live URLs (includes history).
-    """
-    if not window_urls:
-        return 0.0
-    overlap = window_urls & profile_urls
-    return len(overlap) / len(window_urls)
+    # Extract tab titles for this window, find emails via grep
+    local tab_titles
+    tab_titles=$(printf '%s' "$windows_raw" | awk -F'\t' -v w="$wid" '$1==w {print $3}')
 
-# ---------------------------------------------------------------------------
-# Step C+D+E: assign each window to a profile
-# ---------------------------------------------------------------------------
-assignments = {}  # wid -> {profile_dir, method, score, ...}
-by_dir = {}
-by_name = {}
-by_email = {}
-unknown = {}
+    # Extract emails from titles (grep for email-like patterns)
+    local raw_emails
+    raw_emails=$(printf '%s' "$tab_titles" |
+      grep -oiE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' |
+      tr '[:upper:]' '[:lower:]' |
+      grep -vE '^(noreply|no-reply|support|info|hello|mailer|notifications)' |
+      sort -u || true)
 
-for wid, w in windows.items():
-    emails = w["emails"]
-    urls = w["urls"]
+    # Find matching profile dirs for extracted emails
+    local candidates="" matched_email=""
+    local -a email_array
+    mapfile -t email_array <<< "$raw_emails"
+    local em
+    for em in "${email_array[@]}"; do
+      [[ -z "$em" ]] && continue
+      local dirs_for_email
+      dirs_for_email=$(printf '%s' "$email_to_dirs" | jq -r --arg e "$em" '.[$e] // [] | .[]' 2> /dev/null)
+      if [[ -n "$dirs_for_email" ]]; then
+        candidates=$(printf '%s\n%s' "$candidates" "$dirs_for_email" | sort -u | sed '/^$/d')
+        [[ -z "$matched_email" ]] && matched_email="$em"
+      fi
+    done
 
-    # Build candidate set
-    candidates = set()
-    matched_email = None
-    for em in emails:
-        if em in email_to_dirs:
-            candidates.update(email_to_dirs[em])
-            if not matched_email:
-                matched_email = em
+    local candidate_count
+    candidate_count=$(printf '%s\n' "$candidates" | sed '/^$/d' | wc -l | tr -d ' ')
 
-    if len(candidates) == 1:
-        # Single unambiguous email match
-        profile_dir = next(iter(candidates))
-        meta = catalog.get(profile_dir, {})
-        assignments[wid] = {
-            "profile_dir": profile_dir,
-            "name": meta.get("name", profile_dir),
-            "email": meta.get("user_name", ""),
-            "method": "email_unique",
-            "score": None,
-        }
-        continue
+    if [[ "$candidate_count" -eq 1 ]]; then
+      matched_dir=$(printf '%s' "$candidates" | sed '/^$/d' | head -1)
+      method="email_unique"
+      local meta_name meta_email
+      meta_name=$(printf '%s' "$catalog_json" | jq -r --arg d "$matched_dir" '.[$d].name // $d')
+      meta_email=$(printf '%s' "$catalog_json" | jq -r --arg d "$matched_dir" '.[$d].user_name // ""')
+      assignments_json=$(printf '%s' "$assignments_json" | jq --arg w "$wid" --arg pd "$matched_dir" \
+        --arg name "$meta_name" --arg email "$meta_email" --arg method "$method" \
+        '. + {($w): {profile_dir: $pd, name: $name, email: $email, method: $method, score: null}}')
+      by_dir=$(printf '%s' "$by_dir" | jq --arg pd "$matched_dir" --arg w "$wid" '. + {($pd): $w}')
+      by_name=$(printf '%s' "$by_name" | jq --arg name "$meta_name" --arg w "$wid" '. + {($name): $w}')
+      by_email=$(printf '%s' "$by_email" | jq --arg email "$meta_email" --arg w "$wid" 'if $email != "" then . + {($email): $w} else . end')
+    elif [[ "$candidate_count" -eq 0 ]]; then
+      # No email match — record as no_signal
+      local first_email
+      first_email=$(printf '%s' "$raw_emails" | head -1)
+      assignments_json=$(printf '%s' "$assignments_json" | jq --arg w "$wid" --arg email "${first_email:-}" \
+        '. + {($w): {profile_dir: null, name: null, email: $email, method: "no_signal", score: 0.0}}')
+      if [[ -n "$first_email" ]]; then
+        unknown=$(printf '%s' "$unknown" | jq --arg email "$first_email" --arg w "$wid" '. + {($email): $w}')
+      fi
+    else
+      # Multiple candidates — same-email collision, assign first match for now
+      # (v0.4.0 will add AX avatar + URL overlap for proper disambiguation)
+      matched_dir=$(printf '%s' "$candidates" | sed '/^$/d' | head -1)
+      method="email_tab"
+      local meta_name meta_email
+      meta_name=$(printf '%s' "$catalog_json" | jq -r --arg d "$matched_dir" '.[$d].name // $d')
+      meta_email=$(printf '%s' "$catalog_json" | jq -r --arg d "$matched_dir" '.[$d].user_name // ""')
+      assignments_json=$(printf '%s' "$assignments_json" | jq --arg w "$wid" --arg pd "$matched_dir" \
+        --arg name "$meta_name" --arg email "$meta_email" --arg method "$method" \
+        '. + {($w): {profile_dir: $pd, name: $name, email: $email, method: $method, score: null}}')
+      by_dir=$(printf '%s' "$by_dir" | jq --arg pd "$matched_dir" --arg w "$wid" '. + {($pd): $w}')
+      by_name=$(printf '%s' "$by_name" | jq --arg name "$meta_name" --arg w "$wid" '. + {($name): $w}')
+      by_email=$(printf '%s' "$by_email" | jq --arg email "$meta_email" --arg w "$wid" 'if $email != "" then . + {($email): $w} else . end')
+    fi
+  done
 
-    if not candidates:
-        # No email match — the window might have no Google tab, or the email
-        # doesn't exist in Local State catalog. Try URL overlap against ALL
-        # profiles in the catalog as a last-resort disambiguation.
-        candidates = set(catalog.keys())
-        method = "url_fallback"
-        # Also record any raw email for the unknown bucket
-        for em in emails:
-            unknown[em] = wid
-    else:
-        # 2+ candidates → same-email collision, disambiguate via URL overlap
-        method = "url_overlap"
-
-    # Score each candidate by URL overlap with its SNSS file
-    scored = []
-    for pd in candidates:
-        snss_urls, mtime = get_snss(pd)
-        score = url_overlap_score(urls, snss_urls)
-        scored.append((pd, score, mtime))
-
-    # Sort by score descending, then by mtime descending (most recent wins ties)
-    scored.sort(key=lambda t: (t[1], t[2]), reverse=True)
-    best_pd, best_score, best_mtime = scored[0]
-
-    if best_score == 0 and method == "url_fallback":
-        # No signal at all — can't assign this window to any profile
-        assignments[wid] = {
-            "profile_dir": None,
-            "name": None,
-            "email": (next(iter(emails)) if emails else ""),
-            "method": "no_signal",
-            "score": 0.0,
-        }
-        continue
-
-    meta = catalog.get(best_pd, {})
-    assignments[wid] = {
-        "profile_dir": best_pd,
-        "name": meta.get("name", best_pd),
-        "email": meta.get("user_name", ""),
-        "method": method,
-        "score": round(best_score, 3),
-    }
-
-# ---------------------------------------------------------------------------
-# Build multi-index maps from the assignments
-# ---------------------------------------------------------------------------
-for wid, a in assignments.items():
-    pd = a.get("profile_dir")
-    if not pd:
-        continue
-    meta = catalog.get(pd, {})
-    by_dir[pd] = wid
-    name = meta.get("name", "")
-    if name:
-        by_name[name] = wid
-    em = meta.get("user_name", "")
-    if em:
-        by_email[em] = wid
-
-result = {
-    "by_dir": by_dir,
-    "by_name": by_name,
-    "by_email": by_email,
-    "unknown": unknown,
-    "assignments": assignments,
-    "catalog": catalog,
-}
-print(json.dumps(result, ensure_ascii=False))
-PYEOF
+  jq -n \
+    --argjson by_dir "$by_dir" \
+    --argjson by_name "$by_name" \
+    --argjson by_email "$by_email" \
+    --argjson unknown "$unknown" \
+    --argjson assignments "$assignments_json" \
+    --argjson catalog "$catalog_json" \
+    '{by_dir: $by_dir, by_name: $by_name, by_email: $by_email,
+      unknown: $unknown, assignments: $assignments, catalog: $catalog}'
 }
 
 # ---------------------------------------------------------------------------
@@ -401,19 +315,11 @@ chrome_fingerprint_cached() {
     need_refresh=1
   else
     local sample_id
-    sample_id=$(CHROME_CACHE_PATH="$CHROME_CACHE" python3 -c '
-import json, os, sys
-try:
-    with open(os.environ["CHROME_CACHE_PATH"]) as f:
-        d = json.load(f)
-    for k in ("by_dir", "by_name", "by_email"):
-        vs = list(d.get(k, {}).values())
-        if vs:
-            print(vs[0])
-            break
-except Exception:
-    pass
-' 2> /dev/null)
+    sample_id=$(jq -r '
+      (.by_dir // {} | to_entries | .[0].value // empty),
+      (.by_name // {} | to_entries | .[0].value // empty),
+      (.by_email // {} | to_entries | .[0].value // empty)
+    ' "$CHROME_CACHE" 2> /dev/null | head -1)
 
     if [[ -n "$sample_id" ]]; then
       local alive
@@ -456,57 +362,69 @@ chrome_window_for() {
   local ref="$1"
   local fp
   fp=$(chrome_fingerprint_cached)
-  CHROME_REF="$ref" CHROME_ROLES="$CHROME_ROLES_FILE" python3 - "$fp" << 'PYEOF'
-import json, os, sys
-fp = json.loads(sys.argv[1])
-ref = os.environ.get("CHROME_REF", "")
-roles_path = os.environ.get("CHROME_ROLES", "")
 
-by_dir = fp.get("by_dir", {})
-by_name = fp.get("by_name", {})
-by_email = fp.get("by_email", {})
-catalog = fp.get("catalog", {})
+  _chrome_resolve_ref() {
+    local r="$1" rl
+    rl=$(printf '%s' "$r" | tr '[:upper:]' '[:lower:]')
+    [[ -z "$rl" ]] && return
 
-def resolve(r):
-    if not r:
-        return ""
-    # Exact matches first
-    if r in by_dir:
-        return by_dir[r]
-    if r in by_name:
-        return by_name[r]
-    if r.lower() in by_email:
-        return by_email[r.lower()]
-    # Substring match against display names
-    rl = r.lower()
-    for name, wid in by_name.items():
-        if rl in name.lower():
-            return wid
-    # Substring match against emails
-    for email, wid in by_email.items():
-        if rl in email.lower():
-            return wid
-    # Substring match against gaia names
-    for dir_name, meta in catalog.items():
-        if rl in (meta.get("gaia_name", "") or "").lower():
-            return by_dir.get(dir_name, "")
-    return ""
+    # Exact matches: by_dir, by_name, by_email
+    local result
+    result=$(printf '%s' "$fp" | jq -r --arg r "$r" --arg rl "$rl" '
+      (if .by_dir[$r] then .by_dir[$r]
+       elif .by_name[$r] then .by_name[$r]
+       elif .by_email[$rl] then .by_email[$rl]
+       else null end) // empty
+    ' 2> /dev/null)
+    if [[ -n "$result" ]]; then
+      printf '%s' "$result"
+      return
+    fi
 
-# First, try the direct reference
-wid = resolve(ref)
+    # Substring match against display names, emails, gaia names
+    result=$(printf '%s' "$fp" | jq -r --arg rl "$rl" '
+      (.by_name | to_entries[] | select(.key | ascii_downcase | contains($rl)) | .value) // empty
+    ' 2> /dev/null | head -1)
+    if [[ -n "$result" ]]; then
+      printf '%s' "$result"
+      return
+    fi
 
-# If no match, try role alias lookup
-if not wid and roles_path and os.path.exists(roles_path):
-    try:
-        with open(roles_path) as f:
-            roles = json.load(f)
-        if ref in roles:
-            wid = resolve(roles[ref])
-    except Exception:
-        pass
+    result=$(printf '%s' "$fp" | jq -r --arg rl "$rl" '
+      (.by_email | to_entries[] | select(.key | ascii_downcase | contains($rl)) | .value) // empty
+    ' 2> /dev/null | head -1)
+    if [[ -n "$result" ]]; then
+      printf '%s' "$result"
+      return
+    fi
 
-print(wid)
-PYEOF
+    result=$(printf '%s' "$fp" | jq -r --arg rl "$rl" '
+      .catalog | to_entries[] |
+      select((.value.gaia_name // "") | ascii_downcase | contains($rl)) |
+      .key as $dir | .value | ($dir)
+    ' 2> /dev/null | head -1)
+    if [[ -n "$result" ]]; then
+      local wid_for_dir
+      wid_for_dir=$(printf '%s' "$fp" | jq -r --arg d "$result" '.by_dir[$d] // empty')
+      [[ -n "$wid_for_dir" ]] && printf '%s' "$wid_for_dir"
+    fi
+  }
+
+  # Try direct reference
+  local wid
+  wid=$(_chrome_resolve_ref "$ref")
+
+  # If no match, try role alias lookup
+  if [[ -z "$wid" && -f "$CHROME_ROLES_FILE" ]]; then
+    local alias_target
+    alias_target=$(jq -r --arg r "$ref" '.[$r] // empty' "$CHROME_ROLES_FILE" 2> /dev/null)
+    if [[ -n "$alias_target" ]]; then
+      wid=$(_chrome_resolve_ref "$alias_target")
+    fi
+  fi
+
+  printf '%s\n' "$wid"
+  unset -f _chrome_resolve_ref
 }
 
 # ---------------------------------------------------------------------------
@@ -578,93 +496,1377 @@ chrome_tab_url() {
 chrome_debug() {
   local fp
   fp=$(chrome_fingerprint_cached)
-  echo "$fp" | python3 -c "
-import sys, json
-fp = json.load(sys.stdin)
-catalog = fp.get('catalog', {})
-assignments = fp.get('assignments', {})
-unknown = fp.get('unknown', {})
 
-method_label = {
-    'email_unique':  'email (unique)',
-    'url_overlap':   'URL overlap (same-email disambiguation)',
-    'url_fallback':  'URL overlap (no email signal)',
-    'no_signal':     '(unassigned)',
+  printf '\n'
+  printf 'Profile catalog (from Chrome Local State):\n'
+  printf '%s' "$fp" | jq -r '
+    .catalog | to_entries[] |
+    "  [\(.key | . + " " * (12 - length))] \(
+      (if .value.name == "" then .key else .value.name end) + " " * 30
+      | .[:30])  \(
+      if .value.user_name == "" then "(no Google account)" else .value.user_name end)\(
+      if .value.is_ephemeral then " [ephemeral]" else "" end)"
+  '
+
+  printf '\n'
+  printf 'Matched windows:\n'
+  local assignment_count
+  assignment_count=$(printf '%s' "$fp" | jq '.assignments | length')
+  if [[ "$assignment_count" -eq 0 ]]; then
+    printf '  (no windows matched — Chrome may not be running, or all windows have no signal)\n'
+  else
+    printf '%s' "$fp" | jq -r '
+      def method_label:
+        {"email_unique": "email (unique)",
+         "email_tab": "email (tab title)",
+         "ax_avatar": "AX avatar button",
+         "url_overlap": "URL overlap",
+         "url_fallback": "URL overlap (no email)",
+         "no_signal": "(unassigned)"};
+      .assignments | to_entries[] |
+      "  win id=\(.key)  \(.value.profile_dir // "?")  \(
+        (.value.name // .value.profile_dir // "?") + " " * 30 | .[:30])  \(
+        (.value.email // "") + " " * 30 | .[:30])  [\(
+        method_label[.value.method] // .value.method // "?")]\(
+        if .value.score != null then "  conf=\(.value.score)" else "" end)"
+    '
+  fi
+
+  local unknown_count
+  unknown_count=$(printf '%s' "$fp" | jq '.unknown | length')
+  if [[ "$unknown_count" -gt 0 ]]; then
+    printf '\n'
+    printf 'Unknown emails (not in catalog):\n'
+    printf '%s' "$fp" | jq -r '.unknown | to_entries[] | "  win id=\(.value)  \(.key)"'
+  fi
 }
 
-print()
-print('Profile catalog (from Chrome Local State):')
-for dir_name, meta in catalog.items():
-    email = meta.get('user_name','') or '(no Google account)'
-    name = meta.get('name','') or dir_name
-    ephemeral = ' [ephemeral]' if meta.get('is_ephemeral') else ''
-    print(f'  [{dir_name:12s}] {name:30s} {email}{ephemeral}')
+# chrome_profile_urls — REMOVED in v0.4.0 (was SNSS debugging tool, replaced by AX + live URL overlap)
 
-print()
-print('Matched windows:')
-if not assignments:
-    print('  (no windows matched — Chrome may not be running, or all windows have no signal)')
-for wid, a in assignments.items():
-    pd = a.get('profile_dir') or '?'
-    name = a.get('name') or pd
-    email = a.get('email','')
-    method = method_label.get(a.get('method'), a.get('method','?'))
-    score = a.get('score')
-    score_str = f'  conf={score:.2f}' if score is not None else ''
-    print(f'  win id={wid:12s}  {pd:12s}  {name:30s}  {email:30s}  [{method}]{score_str}')
+# ---------------------------------------------------------------------------
+# v0.7.0 — Workflow orchestration helpers (feature 004)
+# ---------------------------------------------------------------------------
 
-if unknown:
-    print()
-    print('Unknown emails (not in catalog — Proton/Fastmail/external):')
-    for email, wid in unknown.items():
-        print(f'  win id={wid:12s}  {email}')
-"
+# Mail provider URL patterns (readonly, NOT overridable — NFR-JS-4)
+# Each index in PROVIDERS matches the corresponding index in UNREAD_RE.
+# Adding a provider requires code change + PR review.
+readonly -a CHROME_MAIL_PROVIDERS=(
+  "mail.google.com"
+  "mail.proton.me"
+  "app.fastmail.com"
+  "outlook.live.com"
+  "outlook.office.com"
+)
+readonly -a CHROME_MAIL_UNREAD_RE=(
+  '\(([0-9]+)\)'
+  '^\(([0-9]+)\)'
+  '\(([0-9]+)\)'
+  '\(([0-9]+)\)'
+  '\(([0-9]+)\)'
+)
+
+# Workflow state path + directory (XDG-convention, 0700 perms).
+_chrome_workflow_state_dir() {
+  printf '%s' "${HOME}/.local/state/claude-mac-chrome"
 }
 
-# ---------------------------------------------------------------------------
-# chrome_profile_urls <profile_dir>
-# Dump the URL set that the library sees for a given profile by parsing the
-# profile's latest Sessions/Tabs_* SNSS file. Useful for debugging same-email
-# disambiguation ('why did window X get assigned to profile Y?').
-# ---------------------------------------------------------------------------
-chrome_profile_urls() {
-  local profile_dir="$1"
-  [[ -z "$profile_dir" ]] && {
-    _chrome_err "usage: chrome_profile_urls <profile_dir>"
+_chrome_workflow_state_path() {
+  printf '%s' "$(_chrome_workflow_state_dir)/workflow-state.json"
+}
+
+_chrome_workflow_state_ensure_dir() {
+  local dir
+  dir=$(_chrome_workflow_state_dir)
+  if [[ -L "$dir" ]]; then
+    _chrome_warn "Workflow state dir is a symlink — refusing"
+    return 1
+  fi
+  (umask 077 && mkdir -p "$dir") || {
+    _chrome_err "Cannot create workflow state dir $dir"
     return 1
   }
-  USER_DATA="$CHROME_USER_DATA" PROFILE_DIR="$profile_dir" python3 << 'PYEOF'
-import os, re, sys
-user_data = os.environ["USER_DATA"]
-profile = os.environ["PROFILE_DIR"]
-sessions = os.path.join(user_data, profile, "Sessions")
-if not os.path.isdir(sessions):
-    sys.stderr.write(f"error: {sessions} does not exist\n")
-    sys.exit(1)
-tabs_files = [f for f in os.listdir(sessions) if f.startswith("Tabs_")]
-if not tabs_files:
-    sys.stderr.write(f"error: no Tabs_* files in {sessions}\n")
-    sys.exit(1)
-tabs_files_full = [os.path.join(sessions, f) for f in tabs_files]
-latest = max(tabs_files_full, key=lambda p: os.path.getmtime(p))
-sys.stderr.write(f"# reading {os.path.basename(latest)} (mtime {int(os.path.getmtime(latest))})\n")
-with open(latest, "rb") as f:
-    data = f.read()
-urls = set()
-for chunk in re.findall(rb'[\x20-\x7e]{8,}', data):
-    s = chunk.decode("ascii", errors="ignore")
-    for m in re.finditer(r'https?://[^\s<>"\'\\`^{}|]+', s):
-        url = m.group(0).rstrip(',.);]')
-        if len(url) < 512:
-            urls.add(url)
-for u in sorted(urls):
-    print(u)
-PYEOF
+}
+
+# Snapshot directory (XDG config, 0700 perms).
+_chrome_snapshot_dir() {
+  printf '%s' "${HOME}/.config/claude-mac-chrome/snapshots"
+}
+
+_chrome_snapshot_ensure_dir() {
+  local dir
+  dir=$(_chrome_snapshot_dir)
+  if [[ -L "$dir" ]]; then
+    _chrome_warn "Snapshot dir is a symlink — refusing"
+    return 1
+  fi
+  (umask 077 && mkdir -p "$dir") || {
+    _chrome_err "Cannot create snapshot dir $dir"
+    return 1
+  }
+}
+
+# Validate snapshot name — reject (not sanitize) names with path traversal
+# or filesystem edge cases. Per NFR-SNAP-3.
+_chrome_validate_snapshot_name() {
+  local name="$1"
+  if [[ ! "$name" =~ ^[a-zA-Z0-9_-]{1,64}$ ]]; then
+    _chrome_err "invalid snapshot name: must match ^[a-zA-Z0-9_-]{1,64}\$"
+    return 1
+  fi
+}
+
+# Strip URL query strings and fragments before persisting. Per NFR-SNAP-1.
+_chrome_strip_url_query() {
+  local url="$1"
+  printf '%s' "${url%%[?#]*}"
+}
+
+# JS injection rate guard — tracks calls per invocation via a counter var.
+# Per NFR-JS-5. Caller sets _CHROME_JS_CALL_COUNT=0 before loop, guard
+# increments and warns when cap exceeded.
+_chrome_js_rate_guard() {
+  : "${_CHROME_JS_CALL_COUNT:=0}"
+  local cap="${CHROME_LIB_MAX_JS_CALLS:-50}"
+  _CHROME_JS_CALL_COUNT=$((_CHROME_JS_CALL_COUNT + 1))
+  if ((_CHROME_JS_CALL_COUNT > cap)); then
+    _chrome_warn "JS call cap exceeded ($cap); skipping remaining tabs"
+    return 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
-# CLI entry point
+# v0.7.0 — chrome_check_inboxes: cross-profile unread count (feature 004 US1)
 # ---------------------------------------------------------------------------
+# Emits one structured line per profile:
+#   PROFILE=<name> EMAIL=<email> UNREAD=<N> DELTA=<+/-N> STATUS=<status>
+# Status: ok | window_not_found | tab_not_found | js_error
+# Always exits 0 — partial results are expected. Per NFR-ERR-1.
+chrome_check_inboxes() {
+  local fp
+  fp=$(chrome_fingerprint_cached)
+
+  # Read prior state for delta computation
+  local state_path prior_state
+  state_path=$(_chrome_workflow_state_path)
+  if [[ -f "$state_path" ]]; then
+    prior_state=$(cat "$state_path" 2> /dev/null || printf '{}')
+  else
+    prior_state='{}'
+  fi
+
+  # Reset JS call counter for rate guard
+  _CHROME_JS_CALL_COUNT=0
+
+  # Build new state as we go
+  local new_counts="{}"
+  local timestamp
+  timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  # Iterate catalog profiles (not just matched windows — report all)
+  local -a profile_dirs
+  mapfile -t profile_dirs < <(printf '%s' "$fp" | jq -r '.catalog | keys[]')
+
+  local profile_dir
+  for profile_dir in "${profile_dirs[@]}"; do
+    [[ -z "$profile_dir" ]] && continue
+
+    local profile_name profile_email win_id
+    profile_name=$(printf '%s' "$fp" | jq -r --arg d "$profile_dir" '.catalog[$d].name // $d')
+    profile_email=$(printf '%s' "$fp" | jq -r --arg d "$profile_dir" '.catalog[$d].user_name // ""')
+    win_id=$(printf '%s' "$fp" | jq -r --arg d "$profile_dir" '.by_dir[$d] // ""')
+
+    if [[ -z "$win_id" ]]; then
+      printf 'PROFILE=%s EMAIL=%s UNREAD=0 DELTA=0 STATUS=window_not_found\n' \
+        "$profile_name" "$profile_email"
+      continue
+    fi
+
+    # Try each mail provider pattern
+    local tab_id="" matched_idx=-1
+    local i
+    for ((i = 0; i < ${#CHROME_MAIL_PROVIDERS[@]}; i++)); do
+      local provider="${CHROME_MAIL_PROVIDERS[$i]}"
+      tab_id=$(chrome_tab_for_url "$win_id" "$provider" 2> /dev/null || true)
+      if [[ -n "$tab_id" ]]; then
+        matched_idx=$i
+        break
+      fi
+    done
+
+    if [[ -z "$tab_id" ]]; then
+      printf 'PROFILE=%s EMAIL=%s UNREAD=0 DELTA=0 STATUS=tab_not_found\n' \
+        "$profile_name" "$profile_email"
+      continue
+    fi
+
+    # Rate guard before JS call
+    if ! _chrome_js_rate_guard; then
+      printf 'PROFILE=%s EMAIL=%s UNREAD=0 DELTA=0 STATUS=rate_capped\n' \
+        "$profile_name" "$profile_email"
+      continue
+    fi
+
+    # Read document.title
+    local title
+    title=$(chrome_js "$win_id" "$tab_id" "document.title" 2> /dev/null || true)
+    if [[ -z "$title" ]]; then
+      printf 'PROFILE=%s EMAIL=%s UNREAD=0 DELTA=0 STATUS=js_error\n' \
+        "$profile_name" "$profile_email"
+      continue
+    fi
+
+    # Extract unread count via matched provider's regex
+    local re="${CHROME_MAIL_UNREAD_RE[$matched_idx]}"
+    local unread=0
+    if [[ "$title" =~ $re ]]; then
+      unread="${BASH_REMATCH[1]}"
+    fi
+
+    # Compute delta against prior state
+    local prior_unread=0
+    prior_unread=$(printf '%s' "$prior_state" |
+      jq -r --arg d "$profile_dir" '.inbox_counts[$d] // 0' 2> /dev/null || printf '0')
+    local delta=$((unread - prior_unread))
+    local delta_str
+    if ((delta > 0)); then
+      delta_str="+$delta"
+    else
+      delta_str="$delta"
+    fi
+
+    printf 'PROFILE=%s EMAIL=%s UNREAD=%d DELTA=%s STATUS=ok\n' \
+      "$profile_name" "$profile_email" "$unread" "$delta_str"
+
+    # Update new state
+    new_counts=$(printf '%s' "$new_counts" | jq --arg d "$profile_dir" --argjson n "$unread" \
+      '. + {($d): $n}')
+  done
+
+  # Write new state atomically (NFR-SNAP-2: 0600 perms)
+  _chrome_workflow_state_ensure_dir || return 0
+  local new_state tmp
+  new_state=$(jq -n --arg ts "$timestamp" --argjson counts "$new_counts" \
+    '{version: 1, last_inbox_check: $ts, inbox_counts: $counts}')
+  tmp=$(mktemp "${state_path}.XXXXXX") || return 0
+  (umask 077 && printf '%s' "$new_state" > "$tmp")
+  mv -f "$tmp" "$state_path" 2> /dev/null || rm -f "$tmp"
+}
+
+# ---------------------------------------------------------------------------
+# v0.7.0 — chrome_snapshot <name>: save tab state to JSON (feature 004 US2)
+# ---------------------------------------------------------------------------
+# Saves current tabs of all profiled windows to
+#   ~/.config/claude-mac-chrome/snapshots/<name>.json
+# URL query strings and fragments are stripped (NFR-SNAP-1).
+# Max 20 snapshots, oldest evicted FIFO with stderr notice (NFR-SNAP-7).
+# File perms 0600, dir 0700 (NFR-SNAP-2).
+chrome_snapshot() {
+  local name="$1"
+  [[ -z "$name" ]] && {
+    _chrome_err "usage: chrome_snapshot <name>"
+    return 1
+  }
+  _chrome_validate_snapshot_name "$name" || return 1
+  _chrome_snapshot_ensure_dir || return 1
+
+  local snap_dir
+  snap_dir=$(_chrome_snapshot_dir)
+  local snap_path="${snap_dir}/${name}.json"
+
+  # FIFO eviction if at cap (NFR-SNAP-7)
+  local snap_count
+  snap_count=$(find "$snap_dir" -maxdepth 1 -name '*.json' -type f 2> /dev/null | wc -l | tr -d ' ')
+  if ((snap_count >= 20)) && [[ ! -f "$snap_path" ]]; then
+    local oldest
+    oldest=$(find "$snap_dir" -maxdepth 1 -name '*.json' -type f -exec stat -f '%m %N' {} + 2> /dev/null |
+      sort -n | head -1 | awk '{print $2}')
+    if [[ -n "$oldest" ]]; then
+      _chrome_warn "snapshot cap reached (20); evicting oldest: $(basename "$oldest")"
+      rm -f "$oldest"
+    fi
+  fi
+
+  # Fetch all windows with their tabs in one AppleScript call per window
+  local fp
+  fp=$(chrome_fingerprint_cached)
+  local timestamp
+  timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  local profiles_json="[]"
+  local -a profile_dirs
+  mapfile -t profile_dirs < <(printf '%s' "$fp" | jq -r '.by_dir | keys[]')
+
+  local profile_dir
+  for profile_dir in "${profile_dirs[@]}"; do
+    [[ -z "$profile_dir" ]] && continue
+    local win_id profile_name
+    win_id=$(printf '%s' "$fp" | jq -r --arg d "$profile_dir" '.by_dir[$d] // ""')
+    profile_name=$(printf '%s' "$fp" | jq -r --arg d "$profile_dir" '.catalog[$d].name // $d')
+    [[ -z "$win_id" ]] && continue
+
+    # Fetch all tabs of this window — URLs and titles
+    local tabs_raw
+    tabs_raw=$(
+      osascript 2> /dev/null << APPLESCRIPT
+tell application "Google Chrome"
+  try
+    set output to ""
+    set theTabs to tabs of window id "$win_id"
+    repeat with t in theTabs
+      set output to output & (URL of t) & tab & (title of t) & linefeed
+    end repeat
+    return output
+  end try
+end tell
+APPLESCRIPT
+    )
+
+    # Parse tabs, strip query strings, build JSON array
+    local tabs_json="[]"
+    local idx=0
+    while IFS=$'\t' read -r url title; do
+      [[ -z "$url" ]] && continue
+      local stripped_url
+      stripped_url=$(_chrome_strip_url_query "$url")
+      tabs_json=$(printf '%s' "$tabs_json" | jq --arg url "$stripped_url" --arg title "$title" --argjson idx "$idx" \
+        '. + [{url: $url, title: $title, index: $idx}]')
+      idx=$((idx + 1))
+    done <<< "$tabs_raw"
+
+    profiles_json=$(printf '%s' "$profiles_json" | jq \
+      --arg dir "$profile_dir" --arg name "$profile_name" --arg wid "$win_id" --argjson tabs "$tabs_json" \
+      '. + [{profile_dir: $dir, profile_name: $name, window_id: $wid, tabs: $tabs}]')
+  done
+
+  local snap_json
+  snap_json=$(jq -n --arg name "$name" --arg ts "$timestamp" --argjson profiles "$profiles_json" \
+    '{name: $name, created_at: $ts, profiles: $profiles}')
+
+  # Atomic write with 0600 perms
+  local tmp
+  tmp=$(mktemp "${snap_path}.XXXXXX") || {
+    _chrome_err "mktemp failed"
+    return 1
+  }
+  (umask 077 && printf '%s' "$snap_json" > "$tmp")
+  mv -f "$tmp" "$snap_path" || {
+    rm -f "$tmp"
+    _chrome_err "snapshot write failed"
+    return 1
+  }
+
+  local tab_total
+  tab_total=$(printf '%s' "$snap_json" | jq '[.profiles[].tabs | length] | add // 0')
+  printf 'Saved snapshot %s: %d profiles, %d tabs\n' "$name" "${#profile_dirs[@]}" "$tab_total"
+}
+
+# ---------------------------------------------------------------------------
+# v0.7.0 — chrome_restore <name>: restore tabs from snapshot (feature 004 US2)
+# ---------------------------------------------------------------------------
+# Emits per-profile status on stdout. URL scheme allowlist enforced
+# (NFR-SNAP-4). Missing profiles skipped with warning. Staleness warned > 7d.
+chrome_restore() {
+  local name="$1"
+  [[ -z "$name" ]] && {
+    _chrome_err "usage: chrome_restore <name>"
+    return 1
+  }
+  _chrome_validate_snapshot_name "$name" || return 1
+
+  local snap_path
+  snap_path="$(_chrome_snapshot_dir)/${name}.json"
+  [[ ! -f "$snap_path" ]] && {
+    _chrome_err "snapshot not found: $name"
+    return 1
+  }
+
+  # Staleness warning (NFR-SNAP-6)
+  local created_at
+  created_at=$(jq -r '.created_at // ""' "$snap_path")
+  if [[ -n "$created_at" ]]; then
+    local created_epoch now_epoch age_days
+    created_epoch=$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$created_at" +%s 2> /dev/null || printf '0')
+    now_epoch=$(date +%s)
+    age_days=$(((now_epoch - created_epoch) / 86400))
+    if ((age_days > 7)); then
+      _chrome_warn "snapshot is $age_days days old (created $created_at)"
+    fi
+  fi
+
+  # Current catalog for profile existence check
+  local catalog
+  catalog=$(chrome_profiles_catalog)
+
+  # Iterate snapshot profiles
+  local profile_count
+  profile_count=$(jq '.profiles | length' "$snap_path")
+  local i
+  for ((i = 0; i < profile_count; i++)); do
+    local profile_dir profile_name
+    profile_dir=$(jq -r --argjson i "$i" '.profiles[$i].profile_dir' "$snap_path")
+    profile_name=$(jq -r --argjson i "$i" '.profiles[$i].profile_name' "$snap_path")
+
+    # Skip missing profiles (spec clarification Q2)
+    local exists
+    exists=$(printf '%s' "$catalog" | jq -r --arg d "$profile_dir" 'has($d)')
+    if [[ "$exists" != "true" ]]; then
+      printf 'PROFILE=%s STATUS=profile_missing TABS=0\n' "$profile_name"
+      _chrome_warn "profile $profile_dir no longer exists — skipping"
+      continue
+    fi
+
+    # Find window for profile
+    local win_id
+    win_id=$(chrome_window_for "$profile_dir" || true)
+    if [[ -z "$win_id" ]]; then
+      printf 'PROFILE=%s STATUS=window_not_found TABS=0\n' "$profile_name"
+      continue
+    fi
+
+    # Iterate tabs, validate scheme, open
+    local tab_count opened=0 rejected=0
+    tab_count=$(jq --argjson i "$i" '.profiles[$i].tabs | length' "$snap_path")
+    local j
+    for ((j = 0; j < tab_count; j++)); do
+      local url
+      url=$(jq -r --argjson i "$i" --argjson j "$j" '.profiles[$i].tabs[$j].url' "$snap_path")
+      # URL scheme allowlist (NFR-SNAP-4)
+      if [[ ! "$url" =~ ^https?:// ]]; then
+        _chrome_warn "rejecting non-http(s) URL from snapshot: ${url:0:60}"
+        rejected=$((rejected + 1))
+        continue
+      fi
+      if chrome_new_tab "$win_id" "$url" > /dev/null 2>&1; then
+        opened=$((opened + 1))
+      fi
+    done
+    printf 'PROFILE=%s STATUS=ok OPENED=%d REJECTED=%d\n' "$profile_name" "$opened" "$rejected"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# v0.8.0 — Safe DOM Action Primitives (feature 005)
+# ---------------------------------------------------------------------------
+#
+# CRITICAL: This section implements the safety gauntlet that makes the
+# "accidental Proton 1mo purchase" incident architecturally impossible.
+# Every mutating action MUST pass through _chrome_safety_gauntlet() before
+# any event is dispatched. Partial-safety implementations are FORBIDDEN —
+# if any helper is missing or fails, the action is blocked, not allowed.
+# See spec 005-safe-dom-actions for the 53 NFRs enforced here.
+
+# URL blocklist (readonly, NOT overridable) — NFR-SR-2
+readonly -a CHROME_URL_BLOCKLIST=(
+  "*/checkout*"
+  "*/payment*"
+  "*/billing*"
+  "*/subscribe*"
+  "*/upgrade*"
+  "*/cart/*"
+  "*/gp/buy/*"
+  "*checkout.stripe.com/*"
+  "*.paypal.com/checkout/*"
+  "*buy.stripe.com/*"
+  "*pay.google.com/*"
+  "*account.proton.me/*upgrade*"
+  "*account.proton.me/*dashboard*"
+  "*accounts.google.com/signin*"
+)
+
+# Check if a URL matches any blocklist pattern. Returns 0 (match/blocked),
+# 1 (clear). Uses bash `case` glob matching.
+_chrome_check_url_blocklist() {
+  local url="$1" pattern
+  for pattern in "${CHROME_URL_BLOCKLIST[@]}"; do
+    # shellcheck disable=SC2254
+    case "$url" in
+      $pattern) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Audit log path (XDG-state, mode 0600, dir 0700) — NFR-SR-6
+_chrome_audit_log_path() {
+  printf '%s' "${HOME}/.local/state/claude-mac-chrome/action-audit.jsonl"
+}
+
+_chrome_audit_ensure_dir() {
+  local dir="${HOME}/.local/state/claude-mac-chrome"
+  if [[ -L "$dir" ]]; then
+    _chrome_warn "Audit log directory is a symlink — refusing"
+    return 1
+  fi
+  (umask 077 && mkdir -p "$dir") || return 1
+}
+
+# Append one JSONL entry to the audit log. Per NFR-SR-V2-14 (JSON-encoded
+# control char sanitization via jq --arg). chflags append-only enforcement
+# (NFR-SR-V2-16) deferred to v0.8.1.
+_chrome_audit_append() {
+  # Args: action outcome url selector element_text reason phase
+  local action="$1" outcome="$2" url="$3" selector="$4"
+  local element_text="${5:-}" reason="${6:-}" phase="${7:-pre_execute}"
+
+  _chrome_audit_ensure_dir || return 1
+  local log_path
+  log_path=$(_chrome_audit_log_path)
+
+  # Create with 0600 on first write
+  if [[ ! -f "$log_path" ]]; then
+    (umask 077 && : > "$log_path")
+  fi
+
+  local timestamp
+  timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  # jq --arg handles all control char escaping + UTF-8 (NFR-SR-V2-14)
+  local line
+  line=$(jq -cn \
+    --arg ts "$timestamp" \
+    --arg action "$action" \
+    --arg outcome "$outcome" \
+    --arg url "$url" \
+    --arg selector "$selector" \
+    --arg element_text "$element_text" \
+    --arg reason "$reason" \
+    --arg phase "$phase" \
+    '{timestamp: $ts, action: $action, outcome: $outcome, url: $url,
+      selector: $selector, element_text: $element_text, reason: $reason,
+      phase: $phase}')
+
+  printf '%s\n' "$line" >> "$log_path"
+}
+
+# Prompt injection scanner — NFR-SR-11.
+# Scans text for instruction-like substrings that could manipulate downstream
+# Claude reasoning. Returns 0 if clean, 1 if injection suspected.
+_chrome_prompt_injection_scan() {
+  local text="$1"
+  [[ -z "$text" ]] && return 0
+  # Case-insensitive match against known injection patterns
+  local lc
+  lc=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
+  local patterns=(
+    "ignore previous"
+    "ignore all previous"
+    "you are now"
+    "you're now"
+    "system:"
+    "assistant:"
+    "<|"
+    "[inst]"
+    "### system"
+    "<system>"
+    "</system>"
+    "jailbreak"
+    "dan mode"
+  )
+  local p
+  for p in "${patterns[@]}"; do
+    if [[ "$lc" == *"$p"* ]]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+# Domain allowlist check — NFR-SR-8, NFR-SR-V2-18 (permissiveness ceiling).
+# If CHROME_LIB_ALLOWED_DOMAINS is set, actions on non-matching domains fail.
+# Returns 0 if allowed (or no allowlist set), 1 if not allowed.
+_chrome_check_domain_allowlist() {
+  local url="$1"
+  local allowlist="${CHROME_LIB_ALLOWED_DOMAINS:-}"
+  [[ -z "$allowlist" ]] && return 0 # No allowlist = unrestricted
+
+  # NFR-SR-V2-18: ceiling — reject wildcards and bare TLDs
+  case "$allowlist" in
+    "*" | ".")
+      _chrome_err "CHROME_LIB_ALLOWED_DOMAINS=$allowlist is too permissive — refusing (NFR-SR-V2-18)"
+      return 1
+      ;;
+  esac
+
+  # Extract hostname from URL
+  local host
+  host="${url#*://}"
+  host="${host%%/*}"
+  host="${host%%:*}"
+  host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+
+  # Parse comma-separated allowlist, check each entry as domain-suffix match
+  local IFS_save="$IFS"
+  IFS=','
+  local entry
+  for entry in $allowlist; do
+    entry=$(printf '%s' "$entry" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+    [[ -z "$entry" ]] && continue
+    # Reject bare TLDs (single label)
+    if [[ "$entry" != *.* ]]; then
+      IFS="$IFS_save"
+      _chrome_err "CHROME_LIB_ALLOWED_DOMAINS entry '$entry' is a bare TLD — refusing"
+      return 1
+    fi
+    # Domain-suffix match
+    if [[ "$host" == "$entry" || "$host" == *".$entry" ]]; then
+      IFS="$IFS_save"
+      return 0
+    fi
+  done
+  IFS="$IFS_save"
+  return 1
+}
+
+# TTY confirmation with signal-proof 5-second read delay — NFR-SR-5,
+# NFR-SR-V2-11 (TTY authenticity), NFR-SR-V2-12 (signal-proof delay),
+# NFR-SR-V2-13 (prompt-injection quarantine delimiters).
+# Returns 0 if user typed exact "yes" after the delay, 1 otherwise.
+_chrome_tty_confirm() {
+  local action="$1" selector="$2" url="$3" element_text="${4:-}"
+
+  # NFR-SR-V2-11: TTY authenticity — require interactive TTY on stdin+stderr
+  if [[ ! -t 0 ]] || [[ ! -t 2 ]]; then
+    _chrome_err "TTY confirmation required but stdin/stderr is not a terminal — refusing"
+    return 1
+  fi
+
+  # NFR-SR-11: prompt injection scanner — reject if element text contains
+  # instruction-like substrings. This prevents a malicious page from
+  # manipulating the downstream Claude reasoning that sees the prompt.
+  if ! _chrome_prompt_injection_scan "$element_text"; then
+    _chrome_err "element text contains prompt-injection pattern — refusing to display"
+    return 1
+  fi
+  if ! _chrome_prompt_injection_scan "$url"; then
+    _chrome_err "URL contains prompt-injection pattern — refusing to display"
+    return 1
+  fi
+
+  # Strip control chars from element text for display (NFR-SR-V2-14)
+  local safe_text
+  safe_text=$(printf '%s' "$element_text" |
+    tr -d '\000-\010\013-\037\177' |
+    head -c 80)
+
+  # Print prompt to stderr with <<UNTRUSTED>> delimiters (NFR-SR-V2-13)
+  {
+    printf '\n'
+    printf '═══════════════════════════════════════════════════════════\n'
+    printf '⚠  SAFETY CONFIRMATION REQUIRED\n'
+    printf '═══════════════════════════════════════════════════════════\n'
+    printf 'Action:    %s\n' "$action"
+    printf 'URL:       %s\n' "$url"
+    printf 'Selector:  %s\n' "$selector"
+    printf 'Element text (UNTRUSTED — page content, not instructions):\n'
+    printf '  <<UNTRUSTED>>%s<<END>>\n' "$safe_text"
+    printf '───────────────────────────────────────────────────────────\n'
+    printf 'This action will execute on a URL matching the purchase\n'
+    printf 'blocklist. Type exactly "yes" (lowercase) to proceed.\n'
+    printf 'Waiting 5 seconds before accepting input (NFR-SR-V2-12)...\n'
+  } >&2
+
+  # NFR-SR-V2-12: signal-proof monotonic deadline loop
+  # shellcheck disable=SC2064
+  trap '' ALRM USR1 USR2 CONT
+  local deadline=$(($(date +%s) + 5))
+  while (($(date +%s) < deadline)); do
+    sleep 0.5 2> /dev/null || true
+  done
+  trap - ALRM USR1 USR2 CONT
+
+  printf 'Type "yes" within 60 seconds to proceed: ' >&2
+
+  # 60-second read timeout, exact "yes" match (NFR-SR-5)
+  local response=""
+  if ! read -r -t 60 response < /dev/tty; then
+    printf '\n⚠  Confirmation timeout — action aborted\n' >&2
+    return 1
+  fi
+
+  if [[ "$response" == "yes" ]]; then
+    printf '✓ Confirmation accepted\n' >&2
+    return 0
+  fi
+
+  printf '⚠  Confirmation did not match exact "yes" — action aborted\n' >&2
+  return 1
+}
+
+# Rate limiter state path — NFR-SR-7, NFR-SR-V2-17 (fail-closed).
+_chrome_rate_state_path() {
+  printf '%s' "${HOME}/.local/state/claude-mac-chrome/rate.json"
+}
+
+# Rate limit check for mutating actions.
+# Args: window_id
+# Returns: 0 if within cap, 1 if rate-limited.
+# Per NFR-SR-7: max 10 per 10s per window, 60 per 60s global.
+# Per NFR-SR-V2-17: fail-closed on missing/corrupt/wrong-owner state.
+_chrome_rate_check() {
+  local window_id="$1"
+  [[ -z "$window_id" ]] && return 1
+
+  local state_path
+  state_path=$(_chrome_rate_state_path)
+
+  # Ensure state directory (reuse audit dir setup)
+  _chrome_audit_ensure_dir || return 1
+
+  # Initialize state file if missing — creates empty, 0600 perms.
+  # This is NOT "silent re-init after corruption" (forbidden by NFR-SR-V2-17);
+  # first-ever initialization on a fresh install is allowed.
+  if [[ ! -f "$state_path" ]]; then
+    (umask 077 && printf '%s' '{"version":1,"events":{},"global":[]}' > "$state_path")
+  fi
+
+  # Fail-closed checks
+  if [[ ! -r "$state_path" ]]; then
+    _chrome_err "rate state unreadable — refusing (NFR-SR-V2-17)"
+    return 1
+  fi
+  # Use /usr/bin/stat (BSD syntax) explicitly — nix-darwin may have GNU
+  # stat in PATH which uses different flags. Per NFR-SR-V2-17, fail-closed.
+  local file_uid current_uid
+  file_uid=$(/usr/bin/stat -f%u "$state_path" 2> /dev/null || printf '')
+  current_uid=$(id -u)
+  if [[ -z "$file_uid" ]]; then
+    _chrome_err "cannot stat rate state file — refusing"
+    return 1
+  fi
+  if [[ "$file_uid" != "$current_uid" ]]; then
+    _chrome_err "rate state owned by uid $file_uid, current $current_uid — refusing"
+    return 1
+  fi
+  # Check mtime is not in the future (clock skew or tamper)
+  local now file_mtime
+  now=$(date +%s)
+  file_mtime=$(/usr/bin/stat -f%m "$state_path" 2> /dev/null || printf '')
+  if [[ -z "$file_mtime" ]]; then
+    _chrome_err "cannot read rate state mtime — refusing"
+    return 1
+  fi
+  if ((file_mtime > now + 60)); then
+    _chrome_err "rate state mtime in the future — refusing"
+    return 1
+  fi
+
+  # Parse state — corruption = refuse
+  local state
+  if ! state=$(jq -c . "$state_path" 2> /dev/null); then
+    _chrome_err "rate state corrupt JSON — refusing (NFR-SR-V2-17)"
+    return 1
+  fi
+  local version
+  version=$(printf '%s' "$state" | jq -r '.version // 0')
+  if [[ "$version" != "1" ]]; then
+    _chrome_err "rate state schema version $version != 1 — refusing"
+    return 1
+  fi
+
+  # Compute cutoffs
+  local now_ms window_cutoff global_cutoff
+  now_ms=$((now * 1000))
+  window_cutoff=$((now_ms - 10000)) # 10s
+  global_cutoff=$((now_ms - 60000)) # 60s
+
+  # Prune old events + check caps
+  # Events for this window: count entries >= window_cutoff
+  # Global: count entries >= global_cutoff
+  local window_count global_count
+  window_count=$(printf '%s' "$state" | jq --arg w "$window_id" --argjson cut "$window_cutoff" \
+    '[(.events[$w] // []) | .[] | select(. >= $cut)] | length')
+  global_count=$(printf '%s' "$state" | jq --argjson cut "$global_cutoff" \
+    '[.global[] | select(. >= $cut)] | length')
+
+  if ((window_count >= 10)); then
+    _chrome_warn "rate limit: window $window_id has $window_count events in last 10s (cap 10)"
+    return 1
+  fi
+  if ((global_count >= 60)); then
+    _chrome_warn "rate limit: global $global_count events in last 60s (cap 60)"
+    return 1
+  fi
+
+  # Within cap — append current timestamp and prune old events, write atomically
+  local new_state tmp
+  new_state=$(printf '%s' "$state" | jq -c \
+    --arg w "$window_id" --argjson now "$now_ms" \
+    --argjson wcut "$window_cutoff" --argjson gcut "$global_cutoff" \
+    '.events[$w] = [((.events[$w] // []) | .[] | select(. >= $wcut))] + [$now]
+     | .global = [(.global[] | select(. >= $gcut))] + [$now]')
+  tmp=$(mktemp "${state_path}.XXXXXX") || return 1
+  (umask 077 && printf '%s' "$new_state" > "$tmp")
+  mv -f "$tmp" "$state_path" 2> /dev/null || {
+    rm -f "$tmp"
+    return 1
+  }
+  return 0
+}
+
+# Load the multi-locale trigger lexicon. Per NFR-SR-V2-1.
+# Returns a regex alternation on stdout. Cached after first load.
+_CHROME_LEXICON_CACHE=""
+_chrome_load_trigger_lexicon() {
+  if [[ -n "$_CHROME_LEXICON_CACHE" ]]; then
+    printf '%s' "$_CHROME_LEXICON_CACHE"
+    return 0
+  fi
+  local lexicon_path="${BASH_SOURCE[0]%/*}/lexicon/triggers.txt"
+  if [[ ! -f "$lexicon_path" ]]; then
+    _chrome_err "Lexicon file not found at $lexicon_path — refusing to run safety check"
+    return 1
+  fi
+  # Strip comments, blank lines, escape regex metachars, join with |
+  local tokens
+  tokens=$(grep -vE '^\s*(#|$)' "$lexicon_path" |
+    sed 's/[][(){}.*+?^$|\\]/\\&/g' |
+    tr '\n' '|' |
+    sed 's/|$//')
+  _CHROME_LEXICON_CACHE="$tokens"
+  printf '%s' "$tokens"
+}
+
+# Safely JSON-stringify a shell string for embedding as a JS string literal.
+# Per NFR-JS-V2-1 — prevents "); evil(); // injection.
+_chrome_json_stringify_sh() {
+  local str="$1"
+  printf '%s' "$str" | jq -Rs .
+}
+
+# Build the safety check JS that runs INSIDE the page.
+# Inputs: selector (JSON-stringified), lexicon regex (JSON-stringified).
+# Returns: JS source code as a single-line string.
+# The JS returns a JSON envelope: {ok, blocked_reason?, element_found?, element_text?, url, ...}
+_chrome_safety_check_js() {
+  local sel_json="$1" lex_json="$2"
+  cat << JSEOF
+(function(){
+  try {
+    const _QS = document.querySelector.bind(document);
+    const _GCS = window.getComputedStyle.bind(window);
+    const sel = ${sel_json};
+    const lexicon = ${lex_json};
+    const lex_re = new RegExp("\\\\b(" + lexicon + ")\\\\b", "i");
+
+    const result = {
+      ok: false,
+      url: document.location.href,
+      ready_state: document.readyState,
+      title: document.title,
+      element_found: false,
+      element_text: "",
+      blocked_reason: null,
+      fired_rail_trace: []
+    };
+    const _fire = function(rail) { result.fired_rail_trace.push(rail); };
+
+    _fire("element_lookup");
+    const el = _QS(sel);
+    if (!el) {
+      result.blocked_reason = "element_not_found";
+      return JSON.stringify(result);
+    }
+    result.element_found = true;
+
+    // Gather text from: textContent UNION innerText UNION shadow DOM UNION ::before/::after
+    // NFR-SR-V2-7, NFR-SR-V2-8, NFR-SR-V2-9.
+    function gatherAllText(node, depth) {
+      if (!node || depth > 10) return "";
+      let parts = [];
+      try { parts.push(node.textContent || ""); } catch(_) {}
+      try { parts.push(node.innerText || ""); } catch(_) {}
+      // CSS pseudo-element content
+      try {
+        const before = _GCS(node, "::before").content;
+        const after = _GCS(node, "::after").content;
+        if (before && before !== "none" && before !== "normal") parts.push(before.replace(/^["']|["']$/g, ""));
+        if (after && after !== "none" && after !== "normal") parts.push(after.replace(/^["']|["']$/g, ""));
+      } catch(_) {}
+      // Recursive shadow DOM descent (open roots only)
+      try {
+        if (node.shadowRoot && node.shadowRoot.mode === "open") {
+          const shadowEls = node.shadowRoot.querySelectorAll("*");
+          for (let i = 0; i < shadowEls.length && i < 100; i++) {
+            parts.push(gatherAllText(shadowEls[i], depth + 1));
+          }
+        }
+      } catch(_) {}
+      return parts.join(" ");
+    }
+
+    const raw_text = gatherAllText(el, 0);
+    // NFR-SR-V2-2: NFKC + zero-width stripping (full TR39 confusables deferred)
+    const norm_text = raw_text.normalize("NFKC")
+      .replace(/[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]/g, "");
+    result.element_text = norm_text.slice(0, 200);
+
+    // 3-ancestor walk checking text + exhaustive attribute list (NFR-SR-V2-10)
+    const attrs_to_check = [
+      "aria-label", "aria-labelledby", "title", "name", "placeholder", "alt",
+      "data-testid", "data-action"
+    ];
+    let node = el;
+    _fire("ancestor_text_walk");
+    for (let depth = 0; depth < 3 && node; depth++) {
+      // Text check using full gatherAllText (includes shadow DOM + ::before/::after)
+      const node_text = gatherAllText(node, 0)
+        .normalize("NFKC")
+        .replace(/[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]/g, "");
+      if (lex_re.test(node_text)) {
+        result.blocked_reason = "purchase_button_text_depth_" + depth;
+        return JSON.stringify(result);
+      }
+      // Attribute check
+      if (node.getAttribute) {
+        for (const attr of attrs_to_check) {
+          const val = node.getAttribute(attr) || "";
+          if (val && lex_re.test(val.normalize("NFKC"))) {
+            result.blocked_reason = "purchase_button_attr_" + attr + "_depth_" + depth;
+            return JSON.stringify(result);
+          }
+        }
+      }
+      node = node.parentElement;
+    }
+
+    // Payment field detection (NFR-SR-3)
+    _fire("payment_field_lock");
+    const payment_inputs = document.querySelectorAll(
+      'input[autocomplete*="cc-"], input[name*="card"], input[name*="cvv"], input[name*="cvc"]'
+    );
+    if (payment_inputs.length > 0) {
+      result.blocked_reason = "payment_field_lock";
+      return JSON.stringify(result);
+    }
+
+    // Inert container check (NFR-JS-V2-8)
+    _fire("inert_container");
+    if (el.closest("template, dialog:not([open]), [inert]")) {
+      result.blocked_reason = "inert_container";
+      return JSON.stringify(result);
+    }
+
+    // Visibility check (NFR-JS-V2-4 partial — full predicate in v0.8.1)
+    _fire("visibility");
+    const cs = _GCS(el);
+    if (cs.display === "none" || cs.visibility === "hidden" || parseFloat(cs.opacity) < 0.1) {
+      result.blocked_reason = "not_visible";
+      return JSON.stringify(result);
+    }
+    _fire("zero_dimensions");
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) {
+      result.blocked_reason = "zero_dimensions";
+      return JSON.stringify(result);
+    }
+
+    // All checks passed — action is allowed
+    result.ok = true;
+    return JSON.stringify(result);
+  } catch (e) {
+    return JSON.stringify({
+      ok: false,
+      blocked_reason: "js_error",
+      error: String(e),
+      stack: (e && e.stack || "").slice(0, 500)
+    });
+  }
+})();
+JSEOF
+}
+
+# chrome_click — the safety-gated click primitive.
+# Usage: chrome_click <window_id> <tab_id> <selector> [--confirm-purchase=<text>] [--dry-run]
+# Returns a JSON envelope on stdout. Exit 0 on success, non-zero on failure.
+#
+# SAFETY GAUNTLET ORDER (spec 005 NFR-SR-*):
+# 1. URL blocklist check (T008) — NFR-SR-2
+# 2. Inject safety check JS (T014) — NFR-SR-1, SR-3, SR-V2-1..10, JS-V2-3..8
+# 3. If safe AND NOT dry-run, dispatch event.click() via AppleScript
+# 4. Return JSON envelope in every case
+chrome_click() {
+  local win_id="$1" tab_id="$2" selector="$3"
+  shift 3 || true
+  local dry_run=0 confirm_purchase=""
+
+  # Parse flags
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)
+        dry_run=1
+        shift
+        ;;
+      --confirm-purchase=*)
+        confirm_purchase="${1#*=}"
+        shift
+        ;;
+      *)
+        _chrome_err "chrome_click: unknown flag $1"
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ -z "$win_id" || -z "$tab_id" || -z "$selector" ]]; then
+    printf '{"ok":false,"error":"INVALID_ARGS","reason":"usage: chrome_click <win> <tab> <selector> [--dry-run] [--confirm-purchase=<text>]"}\n'
+    return 2
+  fi
+
+  # Step 1: Read the current tab URL (authoritative Chrome state)
+  local current_url
+  current_url=$(chrome_tab_url "$win_id" "$tab_id" 2> /dev/null || printf '')
+  if [[ -z "$current_url" ]]; then
+    printf '{"ok":false,"error":"ELEMENT_NOT_FOUND","reason":"could_not_read_tab_url","window_id":"%s","tab_id":"%s"}\n' "$win_id" "$tab_id"
+    return 3
+  fi
+
+  # Audit log: pre-execute entry
+  _chrome_audit_append "click" "pending" "$current_url" "$selector" "" "" "pre_execute" 2> /dev/null || true
+
+  # Step 1a: Domain allowlist check (NFR-SR-8, only if CHROME_LIB_ALLOWED_DOMAINS set)
+  if ! _chrome_check_domain_allowlist "$current_url"; then
+    _chrome_audit_append "click" "blocked" "$current_url" "$selector" "" "not_in_allowlist" "post_execute" 2> /dev/null || true
+    printf '{"ok":false,"error":"NOT_ALLOWED_DOMAIN","reason":"url not in CHROME_LIB_ALLOWED_DOMAINS","url":%s}\n' \
+      "$(_chrome_json_stringify_sh "$current_url")"
+    return 1
+  fi
+
+  # Step 2: URL blocklist check (NFR-SR-2)
+  if _chrome_check_url_blocklist "$current_url"; then
+    if [[ -z "$confirm_purchase" ]]; then
+      _chrome_audit_append "click" "blocked" "$current_url" "$selector" "" "url_blocklist" "post_execute" 2> /dev/null || true
+      printf '{"ok":false,"error":"SAFETY_BLOCK","reason":"url_blocklist","url":%s,"hint":"pass --confirm-purchase=<exact-button-text> to override (requires TTY confirmation + 5s delay)"}\n' \
+        "$(_chrome_json_stringify_sh "$current_url")"
+      return 1
+    fi
+    # --confirm-purchase provided: require TTY confirmation with 5s signal-proof delay
+    if ! _chrome_tty_confirm "click" "$selector" "$current_url" "$confirm_purchase"; then
+      _chrome_audit_append "click" "blocked" "$current_url" "$selector" "$confirm_purchase" "tty_confirmation_denied" "post_execute" 2> /dev/null || true
+      printf '{"ok":false,"error":"SAFETY_BLOCK","reason":"tty_confirmation_denied","url":%s}\n' \
+        "$(_chrome_json_stringify_sh "$current_url")"
+      return 1
+    fi
+    _chrome_audit_append "click" "tty_confirmed" "$current_url" "$selector" "$confirm_purchase" "user_typed_yes" "pre_execute" 2> /dev/null || true
+  fi
+
+  # Step 2a: Rate limit check (NFR-SR-7, NFR-SR-V2-17)
+  if ! _chrome_rate_check "$win_id"; then
+    _chrome_audit_append "click" "blocked" "$current_url" "$selector" "" "rate_limited" "post_execute" 2> /dev/null || true
+    printf '{"ok":false,"error":"RATE_LIMITED","reason":"exceeded 10 actions/10s per window or 60/min global","url":%s}\n' \
+      "$(_chrome_json_stringify_sh "$current_url")"
+    return 1
+  fi
+
+  # Step 3: Load the multi-locale lexicon (required — fail closed if missing)
+  local lexicon
+  if ! lexicon=$(_chrome_load_trigger_lexicon); then
+    printf '{"ok":false,"error":"SAFETY_BLOCK","reason":"lexicon_load_failed","hint":"lexicon/triggers.txt is missing — cannot safely evaluate action"}\n'
+    return 1
+  fi
+
+  # Step 4: Build the safety check JS with parameterized inputs (NFR-JS-V2-1)
+  local sel_json lex_json safety_js
+  sel_json=$(_chrome_json_stringify_sh "$selector")
+  lex_json=$(_chrome_json_stringify_sh "$lexicon")
+  safety_js=$(_chrome_safety_check_js "$sel_json" "$lex_json")
+
+  # Collapse to single line for chrome_js transport
+  local safety_js_oneline
+  safety_js_oneline=$(printf '%s' "$safety_js" | tr '\n' ' ')
+
+  # Step 5: Inject the safety check
+  local check_result
+  check_result=$(chrome_js "$win_id" "$tab_id" "$safety_js_oneline" 2> /dev/null || printf '')
+  if [[ -z "$check_result" ]]; then
+    printf '{"ok":false,"error":"JS_ERROR","reason":"safety_check_returned_empty","url":%s}\n' \
+      "$(_chrome_json_stringify_sh "$current_url")"
+    return 1
+  fi
+
+  # Step 6: Parse the envelope
+  local check_ok check_reason
+  check_ok=$(printf '%s' "$check_result" | jq -r '.ok // false' 2> /dev/null || printf 'false')
+  if [[ "$check_ok" != "true" ]]; then
+    check_reason=$(printf '%s' "$check_result" | jq -r '.blocked_reason // "unknown"' 2> /dev/null || printf 'parse_error')
+    local element_text
+    element_text=$(printf '%s' "$check_result" | jq -r '.element_text // ""' 2> /dev/null || printf '')
+    _chrome_audit_append "click" "blocked" "$current_url" "$selector" "$element_text" "$check_reason" "post_execute" 2> /dev/null || true
+    printf '{"ok":false,"error":"SAFETY_BLOCK","reason":%s,"element_text":%s,"url":%s}\n' \
+      "$(_chrome_json_stringify_sh "$check_reason")" \
+      "$(_chrome_json_stringify_sh "$element_text")" \
+      "$(_chrome_json_stringify_sh "$current_url")"
+    return 1
+  fi
+
+  # Step 7: Safe to dispatch (unless dry-run)
+  if ((dry_run)); then
+    _chrome_audit_append "click" "dry_run" "$current_url" "$selector" "" "would_dispatch" "post_execute" 2> /dev/null || true
+    printf '{"ok":true,"action":"click","dry_run":true,"selector":%s,"url":%s}\n' \
+      "$(_chrome_json_stringify_sh "$selector")" \
+      "$(_chrome_json_stringify_sh "$current_url")"
+    return 0
+  fi
+
+  # Step 8: Dispatch full pointer event sequence per NFR-JS-1.
+  # `element.click()` alone is insufficient for React 18+/Vue 3 components
+  # that listen on pointerdown. Full sequence: pointerdown → mousedown →
+  # pointerup → mouseup → click, with coordinates from getBoundingClientRect
+  # center. Includes element.isConnected verification (NFR-SR-V2-6) and
+  # elementFromPoint hit-test (NFR-JS-V2-5) as a partial visibility guard.
+  local click_js
+  click_js=$(
+    cat << JSEOF
+(function(){
+  try {
+    const _QS = document.querySelector.bind(document);
+    const _GCS = window.getComputedStyle.bind(window);
+    const _EFP = document.elementFromPoint.bind(document);
+    const el = _QS(${sel_json});
+    if (!el) return JSON.stringify({ok:false,error:"element_vanished"});
+    if (!el.isConnected) return JSON.stringify({ok:false,error:"element_detached"});
+    if (el.disabled || el.getAttribute("aria-disabled") === "true") {
+      return JSON.stringify({ok:false,error:"element_disabled"});
+    }
+    el.scrollIntoView({block:"center", inline:"center", behavior:"instant"});
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) {
+      return JSON.stringify({ok:false,error:"zero_dimensions"});
+    }
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    if (cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight) {
+      return JSON.stringify({ok:false,error:"out_of_viewport",cx:cx,cy:cy});
+    }
+    // Hit-test: verify the element at the target coords is actually our target
+    // (defeats clickjacking overlays). NFR-JS-V2-5.
+    const hit = _EFP(cx, cy);
+    if (hit !== el && !el.contains(hit)) {
+      return JSON.stringify({ok:false,error:"clickjack_suspected",hit_tag:(hit && hit.tagName)||"null"});
+    }
+    // Full pointer event sequence
+    const opts = {bubbles:true, cancelable:true, view:window, button:0, clientX:cx, clientY:cy, pointerType:"mouse"};
+    el.dispatchEvent(new PointerEvent("pointerdown", opts));
+    el.dispatchEvent(new MouseEvent("mousedown", opts));
+    el.dispatchEvent(new PointerEvent("pointerup", opts));
+    el.dispatchEvent(new MouseEvent("mouseup", opts));
+    const clickResult = el.dispatchEvent(new MouseEvent("click", opts));
+    if (!clickResult) {
+      return JSON.stringify({ok:false,error:"click_preventDefault_called"});
+    }
+    return JSON.stringify({ok:true, dispatched:"pointer_sequence"});
+  } catch(e) {
+    return JSON.stringify({ok:false,error:"dispatch_exception",message:String(e)});
+  }
+})();
+JSEOF
+  )
+  # Collapse multi-line JS to single line for chrome_js transport
+  local click_js_oneline
+  click_js_oneline=$(printf '%s' "$click_js" | tr '\n' ' ')
+  local click_result
+  click_result=$(chrome_js "$win_id" "$tab_id" "$click_js_oneline" 2> /dev/null || printf '')
+
+  if [[ "$click_result" == *'"ok":true'* ]]; then
+    _chrome_audit_append "click" "ok" "$current_url" "$selector" "" "dispatched" "post_execute" 2> /dev/null || true
+    printf '{"ok":true,"action":"click","selector":%s,"url":%s}\n' \
+      "$(_chrome_json_stringify_sh "$selector")" \
+      "$(_chrome_json_stringify_sh "$current_url")"
+    return 0
+  else
+    _chrome_audit_append "click" "dispatch_failed" "$current_url" "$selector" "" "" "post_execute" 2> /dev/null || true
+    printf '{"ok":false,"error":"CLICK_DISPATCH_FAILED","selector":%s,"url":%s}\n' \
+      "$(_chrome_json_stringify_sh "$selector")" \
+      "$(_chrome_json_stringify_sh "$current_url")"
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# v0.8.0 — Read-only primitives (feature 005 US4, US5)
+# ---------------------------------------------------------------------------
+
+# chrome_query — read element text or attribute, READ-ONLY (no gauntlet).
+# Usage: chrome_query <win> <tab> <selector> [--attribute <name>] [--deep]
+# Returns JSON envelope: {ok, found, text?, attribute?, url}
+chrome_query() {
+  local win_id="$1" tab_id="$2" selector="$3"
+  shift 3 || true
+  local attribute="" deep=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --attribute)
+        attribute="$2"
+        shift 2
+        ;;
+      --attribute=*)
+        attribute="${1#*=}"
+        shift
+        ;;
+      --deep)
+        deep=1
+        shift
+        ;;
+      *)
+        _chrome_err "chrome_query: unknown flag $1"
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ -z "$win_id" || -z "$tab_id" || -z "$selector" ]]; then
+    printf '{"ok":false,"error":"INVALID_ARGS","reason":"usage: chrome_query <win> <tab> <selector> [--attribute name] [--deep]"}\n'
+    return 2
+  fi
+
+  local sel_json attr_json
+  sel_json=$(_chrome_json_stringify_sh "$selector")
+  attr_json=$(_chrome_json_stringify_sh "$attribute")
+
+  # Read-only query JS. Descends into open shadow roots if --deep.
+  # NFR-JS-V2-3 realm pinning applied.
+  local query_js
+  query_js=$(
+    cat << JSEOF
+(function(){
+  try {
+    const _QS = document.querySelector.bind(document);
+    const _QSA = document.querySelectorAll.bind(document);
+    const sel = ${sel_json};
+    const attr = ${attr_json};
+    const deep = ${deep};
+
+    function findDeep(root, selector, depth) {
+      if (depth > 10) return null;
+      try {
+        const direct = root.querySelector(selector);
+        if (direct) return direct;
+      } catch(_) {}
+      // Walk all elements and descend into shadow roots
+      try {
+        const all = root.querySelectorAll ? root.querySelectorAll("*") : [];
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i];
+          if (el.shadowRoot && el.shadowRoot.mode === "open") {
+            const hit = findDeep(el.shadowRoot, selector, depth + 1);
+            if (hit) return hit;
+          }
+        }
+      } catch(_) {}
+      return null;
+    }
+
+    const el = deep ? findDeep(document, sel, 0) : _QS(sel);
+    if (!el) {
+      return JSON.stringify({ok: true, found: false, url: document.location.href});
+    }
+
+    let value;
+    if (attr) {
+      value = el.getAttribute(attr);
+    } else {
+      value = (el.textContent || el.innerText || "").slice(0, 10000);
+    }
+    return JSON.stringify({
+      ok: true,
+      found: true,
+      value: value,
+      tag: el.tagName,
+      url: document.location.href
+    });
+  } catch(e) {
+    return JSON.stringify({ok: false, error: "query_exception", message: String(e)});
+  }
+})();
+JSEOF
+  )
+  local query_js_oneline
+  query_js_oneline=$(printf '%s' "$query_js" | tr '\n' ' ')
+
+  local result
+  result=$(chrome_js "$win_id" "$tab_id" "$query_js_oneline" 2> /dev/null || printf '')
+  if [[ -z "$result" ]]; then
+    printf '{"ok":false,"error":"JS_ERROR","reason":"query returned empty"}\n'
+    return 1
+  fi
+  printf '%s\n' "$result"
+}
+
+# chrome_wait_for — poll for element to appear, host-side loop.
+# Usage: chrome_wait_for <win> <tab> <selector> [--timeout ms] [--interval ms] [--deep]
+# Default timeout 10000ms, interval 250ms, max 60000ms.
+chrome_wait_for() {
+  local win_id="$1" tab_id="$2" selector="$3"
+  shift 3 || true
+  local timeout_ms=10000 interval_ms=250 deep_flag=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --timeout)
+        timeout_ms="$2"
+        shift 2
+        ;;
+      --timeout=*)
+        timeout_ms="${1#*=}"
+        shift
+        ;;
+      --interval)
+        interval_ms="$2"
+        shift 2
+        ;;
+      --interval=*)
+        interval_ms="${1#*=}"
+        shift
+        ;;
+      --deep)
+        deep_flag="--deep"
+        shift
+        ;;
+      *)
+        _chrome_err "chrome_wait_for: unknown flag $1"
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ -z "$win_id" || -z "$tab_id" || -z "$selector" ]]; then
+    printf '{"ok":false,"error":"INVALID_ARGS","reason":"usage: chrome_wait_for <win> <tab> <selector> [--timeout ms] [--interval ms] [--deep]"}\n'
+    return 2
+  fi
+
+  # Clamp per NFR-FR-7a
+  if ((timeout_ms > 60000)); then timeout_ms=60000; fi
+  if ((interval_ms < 100)); then interval_ms=100; fi
+
+  local start_ms
+  start_ms=$(date +%s000)
+  local deadline_ms=$((start_ms + timeout_ms))
+  local sleep_sec
+  # bash doesn't do float math; use awk
+  sleep_sec=$(awk "BEGIN { printf \"%.3f\", $interval_ms / 1000 }")
+
+  while :; do
+    local now_ms
+    now_ms=$(date +%s000)
+    if ((now_ms >= deadline_ms)); then
+      local elapsed=$((now_ms - start_ms))
+      printf '{"ok":false,"error":"TIMEOUT","found":false,"elapsed_ms":%d}\n' "$elapsed"
+      return 1
+    fi
+    local result
+    # shellcheck disable=SC2086
+    result=$(chrome_query "$win_id" "$tab_id" "$selector" $deep_flag 2> /dev/null || printf '')
+    if [[ -n "$result" ]]; then
+      local found
+      found=$(printf '%s' "$result" | jq -r '.found // false' 2> /dev/null || printf 'false')
+      if [[ "$found" == "true" ]]; then
+        local elapsed=$((now_ms - start_ms))
+        printf '{"ok":true,"found":true,"elapsed_ms":%d}\n' "$elapsed"
+        return 0
+      fi
+    fi
+    sleep "$sleep_sec" 2> /dev/null || true
+  done
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   # Strict mode only in CLI — sourcing shouldn't impose it on the caller.
   set -euo pipefail
@@ -688,7 +1890,27 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     new_tab) chrome_new_tab "$@" ;;
     tab_url) chrome_tab_url "$@" ;;
     debug) chrome_debug ;;
-    profile_urls) chrome_profile_urls "$@" ;;
+    profile_urls)
+      _chrome_err "profile_urls was removed in v0.4.0 (SNSS parser eliminated)"
+      exit 1
+      ;;
+    check_inboxes) chrome_check_inboxes ;;
+    snapshot) chrome_snapshot "$@" ;;
+    restore) chrome_restore "$@" ;;
+    click) chrome_click "$@" ;;
+    query) chrome_query "$@" ;;
+    wait_for) chrome_wait_for "$@" ;;
+    _emit_safety_js)
+      # Hidden CLI verb for test harness (feature 006 T006).
+      # Usage: chrome-lib.sh _emit_safety_js <selector>
+      # Emits the safety check JS to stdout with parameterized selector.
+      # Not documented in public help. Test-only.
+      _emit_sel="${1:-button}"
+      _emit_sel_json=$(_chrome_json_stringify_sh "$_emit_sel")
+      _emit_lex_json=$(_chrome_json_stringify_sh "$(_chrome_load_trigger_lexicon)")
+      _chrome_safety_check_js "$_emit_sel_json" "$_emit_lex_json"
+      unset _emit_sel _emit_sel_json _emit_lex_json
+      ;;
     refresh)
       rm -f "$CHROME_CACHE"
       chrome_fingerprint_cached

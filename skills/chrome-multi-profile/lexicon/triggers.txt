@@ -1,0 +1,76 @@
+# Multi-locale purchase-button trigger lexicon
+# Per spec NFR-SR-V2-1. pt-BR is mandatory (Pedro's UFPE + Sciensa profiles).
+# Comments (lines starting with #) and empty lines are ignored by the loader.
+# Each token becomes a word-boundary regex alternation.
+
+# English (baseline)
+buy
+purchase
+pay
+checkout
+subscribe
+upgrade
+confirm order
+place order
+complete purchase
+renew
+activate plan
+start trial
+
+# Portuguese (Brazil/Portugal) — MANDATORY for Pedro's profiles
+comprar
+adquirir
+assinar
+pagar
+finalizar
+contratar
+renovar
+atualizar plano
+assinatura
+comprar agora
+finalizar compra
+
+# Spanish
+pagar
+suscribir
+finalizar compra
+comprar ahora
+contratar
+
+# French
+acheter
+payer
+abonner
+commander
+valider
+
+# German
+kaufen
+bezahlen
+abonnieren
+bestellen
+jetzt kaufen
+
+# Italian
+comprare
+pagare
+abbonarsi
+ordinare
+
+# Japanese
+購入
+支払
+申し込
+注文
+
+# Simplified Chinese
+购买
+支付
+订阅
+结算
+
+# Russian
+купить
+оплата
+подписка
+заказ

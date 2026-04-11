@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "element_found": true,
+  "blocked_reason": "not_visible",
+  "evidence": { "visibility": "hidden" },
+  "fired_rail_trace": ["element_lookup", "ancestor_text_walk", "payment_field_lock", "inert_container", "visibility"],
+  "selector": "#target"
+}

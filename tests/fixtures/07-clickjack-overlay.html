@@ -1,0 +1,20 @@
+<!--
+  target_rail: clickjack_suspected (INTEGRATION-ONLY — NFR-V2-SAFETY-1)
+  isolation_proof: Benign button at coordinates (100,100) is visually
+    covered by a transparent z-index:9999 div. elementFromPoint(100,100)
+    returns the overlay, not the button. REQUIRES Playwright + real
+    Chromium. Happy-dom has no layout engine and cannot hit-test.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 07 — clickjack overlay</title></head>
+  <body>
+    <style>
+      #target { position: absolute; top: 100px; left: 100px; width: 80px; height: 30px; }
+      #overlay { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 9999; background: transparent; }
+    </style>
+    <button id="target">Mark as read</button>
+    <div id="overlay"></div>
+  </body>
+</html>

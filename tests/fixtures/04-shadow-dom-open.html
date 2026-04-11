@@ -1,0 +1,22 @@
+<!--
+  target_rail: purchase_button_text_depth_0 (via shadowRoot traversal)
+  isolation_proof: "Upgrade" lives inside an open shadow root attached to
+    #host. Target selector resolves to the host element; gatherAllText
+    MUST descend into the shadow root to find the token.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 04 — open shadow DOM</title></head>
+  <body>
+    <div id="host"></div>
+    <script>
+      const host = document.getElementById("host");
+      const root = host.attachShadow({ mode: "open" });
+      const btn = document.createElement("button");
+      btn.id = "target";
+      btn.textContent = "Upgrade";
+      root.appendChild(btn);
+    </script>
+  </body>
+</html>

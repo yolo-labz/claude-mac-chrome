@@ -234,13 +234,100 @@ Contributions welcome. Places to extend:
 
 File issues at https://github.com/yolo-labz/claude-mac-chrome/issues.
 
-## Security and privacy
+## Troubleshooting
+
+**Claude says Chrome isn't running but Chrome is clearly open.**
+Check `System Settings → Privacy & Security → Automation` and confirm Claude Code has permission to control "Google Chrome". macOS TCC silently blocks Apple Events otherwise.
+
+**`chrome_window_for` returns "not_open" for a profile I know is open.**
+Run `chrome-lib.sh fingerprint | jq` and verify the profile appears in the `by_dir` and `by_email` maps. If it doesn't, the profile hasn't been opened yet in this Chrome session — open any tab in it first, then retry. The library queries live Chrome state, not just the catalog.
+
+**`chrome_click` returns `blocked_reason: purchase_button_text_depth_0` on a button I want to click.**
+That's the safety gauntlet working as designed. The trigger lexicon matched "Upgrade", "Comprar", "Subscribe", or a similar word in the button's text, an ancestor, or an attribute. If this is legitimate, add `--confirm-purchase=<exact text>` — you'll still be asked to confirm on the terminal.
+
+**`chrome_click` returns `blocked_reason: payment_field_lock` on an unrelated button.**
+The page has a credit-card input somewhere on it. The safety check refuses to click ANY button on a page with payment fields as a defense-in-depth measure. Use `chrome_query` to read the DOM instead, or dispatch the click via the Chrome UI directly.
+
+**Rate limited: "10 clicks per 60s exceeded".**
+Give it a minute. The rate limiter is per-verb (click, query, wait_for), so you can still use read-only operations during the cooldown. To change the limit, edit the constant in `chrome-lib.sh` — but note that the default was chosen to prevent runaway agents.
+
+**`tests/run.sh` fails with "happy-dom not vendored yet".**
+Run `scripts/verify-vendor.sh` or wait until the release ceremony has produced `tests/vendor/happy-dom.mjs`. The JS fixture suite is skipped cleanly if the vendor bundle isn't present.
+
+**Bats tests pass locally but CI fails on `rate_limiter`.**
+The rate limiter's fail-closed check includes a wrong-uid test that assumes Linux file ownership semantics. macOS and Linux diverge on `stat` format strings. See `tests/bats/04-rate-limiter.bats` for the dual-format handling.
+
+**`gpg --verify SHA256SUMS.asc SHA256SUMS` fails after download.**
+Ensure you downloaded the `.asc` file alongside the `SHA256SUMS` file AND imported the maintainer's public GPG key. Fingerprint is published in `SECURITY.md`. If the key has been rotated, a new fingerprint will be pinned at the top of SECURITY.md with a timestamp.
+
+**`cosign verify-blob` fails with "certificate identity mismatch".**
+Verify your cosign CLI is ≥ v2.4.0. The `--certificate-identity-regexp` flag enforces that the signer was a GitHub Actions run on the yolo-labz/claude-mac-chrome repository. If the regex doesn't match, the binary may have been signed by an attacker's workflow — do not install.
+
+**`scripts/build-release.sh` produces different SHA-256 on two runs.**
+Reproducibility is broken. Most likely cause: non-GNU `tar` in PATH (brew install gnu-tar), or `SOURCE_DATE_EPOCH` unset. Run `tar --version` to confirm GNU tar is being used. If the mismatch persists, diffoscope the two tarballs to locate the drift.
+
+## FAQ
+
+**Q: Why not use CDP (Chrome DevTools Protocol)?**
+A: Chromium M122+ blocks CDP on the default profile to prevent cookie theft. The only bypass is the `DevToolsRemoteDebuggingAllowed` enterprise policy, which broadcasts attack surface in `chrome://policy`. Principle II of the constitution forbids this.
+
+**Q: Why not use a headless Chromium?**
+A: The whole point is to automate your REAL Chrome profiles with your REAL cookies. A headless instance discards every login. The motivating use case was never "run a bot" — it was "let Claude check my Gmail for me".
+
+**Q: Why does this require macOS?**
+A: Because the library talks to Chrome via Apple Events + AppleScript. A Linux port would need to use xdotool/wmctrl/ydotool — a completely different architecture. v1.2.0 may port it; see `docs/MIGRATION-0.x-to-1.0.md`.
+
+**Q: Why do I need to confirm purchases on the TTY?**
+A: Because the motivating incident was an AI accidentally subscribing to a 1-month Proton Mail plan instead of 12-month. The entire safety gauntlet exists to make that kind of mistake mechanically impossible. TTY confirmation is the final backstop.
+
+**Q: Is the Portuguese trigger lexicon really mandatory?**
+A: Yes, for me. I have two Chrome profiles (UFPE and Sciensa) that regularly load pt-BR checkout pages. Without the pt-BR tokens (`comprar`, `assinar`, `pagar`, `finalizar`, `contratar`), an English-only regex would cheerfully click "Comprar agora". The lexicon is tested by `tests/bats/03-lexicon-loader.bats`.
+
+**Q: Does this plugin call any external APIs?**
+A: No. Zero network calls. Zero telemetry. Everything is local.
+
+**Q: Can I use this with Arc / Brave / Edge?**
+A: Not in v1.0.0. Arc/Brave/Edge share Chrome's AppleScript dictionary but the `Local State` layout and profile detection differ. Cross-browser support is on the v1.1.0 roadmap.
+
+**Q: How do I update the trigger lexicon?**
+A: Edit `skills/chrome-multi-profile/lexicon/triggers.txt`, one token per line, comments allowed with `#`. Run `tests/bats/03-lexicon-loader.bats` to verify your additions parse. PRs touching the lexicon are security-reviewed via CODEOWNERS.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the disclosure policy and release verification procedure.
+
+Highlights:
+- 15-layer safety gauntlet on `chrome_click` (URL blocklist, trigger lexicon with pt-BR, Unicode normalization + zero-width strip, shadow DOM walker, pseudo-element extractor, payment field lock, inert container check, visibility + zero-dim check, clickjack hit-test, rate limiter, audit log, TTY confirm, prompt injection scanner, domain allowlist, 3-ancestor attribute walk)
+- Signed releases: cosign keyless + SLSA L3 + CycloneDX 1.7 SBOM
+- Reproducible builds verified byte-by-byte in CI
+- Weekly OSV-Scanner on vendored dependencies
+- OpenSSF Scorecard ≥ 7.0
+
+## Privacy
 
 - The library reads the local user's `~/Library/Application Support/Google/Chrome/Local State` file. This contains email addresses and profile names. The data **never leaves your machine** — it's used only to build an in-memory mapping and optionally cached at `/tmp/chrome-fingerprint.json`.
 - No network calls.
 - No telemetry.
 - No hardcoded URLs in the defaults — the library reads YOUR profiles, not ours.
 - The optional `~/.config/claude-mac-chrome/roles.json` file is user-local and never committed anywhere.
+- An audit log of every `chrome_click` dispatch is written to `~/Library/Logs/claude-mac-chrome/audit.jsonl` (mode 0600, append-only). This is LOCAL ONLY.
+
+## Verifying releases
+
+```bash
+# Download the release and its signature bundle
+curl -sLO https://github.com/yolo-labz/claude-mac-chrome/releases/download/v1.0.0/claude-mac-chrome.tar.gz
+curl -sLO https://github.com/yolo-labz/claude-mac-chrome/releases/download/v1.0.0/claude-mac-chrome.tar.gz.sigstore
+
+# Verify the cosign keyless signature
+cosign verify-blob \
+  --certificate-identity-regexp 'https://github.com/yolo-labz/claude-mac-chrome/' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  --bundle claude-mac-chrome.tar.gz.sigstore \
+  claude-mac-chrome.tar.gz
+```
+
+If verification fails, **do not install**. File a security advisory.
 
 ## License
 

@@ -33,8 +33,8 @@ The official `anthropics/claude-plugins-official` repo **auto-rejects external P
 |---|---|
 | Plugin name | `claude-mac-chrome` |
 | Repo URL | `https://github.com/yolo-labz/claude-mac-chrome` |
-| Pinned commit SHA | `6c724ed90511c46d8ba32410890268001ee2d7f1` |
-| Version | `0.3.0` |
+| Pinned commit SHA | `c1055a93dee95e9a16547d8b5e1a795066c163f0` (or latest on `v1.0.0` tag) |
+| Version | `1.0.0-rc1` (update to `1.0.0` after tag ceremony) |
 | Category | `development` |
 | License | MIT |
 | Homepage | `https://github.com/yolo-labz/claude-mac-chrome` |

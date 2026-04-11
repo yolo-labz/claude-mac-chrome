@@ -1,0 +1,15 @@
+{
+  "name": "claude-mac-chrome-integration",
+  "version": "1.0.0-integration",
+  "private": true,
+  "description": "Playwright integration suite for claude-mac-chrome. Isolated from runtime. Excluded from release tarball per scripts/build-release.sh.",
+  "scripts": {
+    "test": "playwright test",
+    "test:parity": "playwright test --grep parity",
+    "install-browsers": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.48.2",
+    "typescript": "5.6.3"
+  }
+}

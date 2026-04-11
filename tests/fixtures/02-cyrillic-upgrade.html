@@ -1,0 +1,15 @@
+<!--
+  target_rail: purchase_button_text_depth_0 (after NFKC + confusables fold)
+  isolation_proof: Button text contains Cyrillic 'р' (U+0440) in "Uрgrade"
+    which visually matches Latin 'p' but is a different codepoint. Without
+    NFKC normalization + confusables folding, ASCII regex would miss.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 02 — Cyrillic upgrade</title></head>
+  <body>
+    <h1>Subscription</h1>
+    <button id="target">Uрgrade</button>
+  </body>
+</html>

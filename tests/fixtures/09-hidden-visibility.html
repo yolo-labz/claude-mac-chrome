@@ -1,0 +1,13 @@
+<!--
+  target_rail: not_visible
+  isolation_proof: Benign button with `visibility: hidden`. Safety check's
+    getComputedStyle(el).visibility === "hidden" MUST fire.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 09 — hidden visibility</title></head>
+  <body>
+    <button id="target" style="visibility:hidden;">Mark as read</button>
+  </body>
+</html>

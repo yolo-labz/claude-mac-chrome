@@ -1,0 +1,27 @@
+# Feature 006 T062 — CODEOWNERS for golden review protection.
+# Per spec §NFR-V2-FX-7.
+#
+# Any PR touching > 3 fixture goldens or the safety check JS requires
+# a security reviewer. Until a team is set up, all high-risk areas are
+# owned by the maintainer.
+
+# Safety-critical core
+/skills/chrome-multi-profile/chrome-lib.sh    @phsb5321
+/skills/chrome-multi-profile/lexicon/         @phsb5321
+
+# Test harness — golden regression protection
+/tests/fixtures/*.expected.json               @phsb5321
+/tests/goldens.lock                           @phsb5321
+/tests/VENDOR-MANIFEST.json                   @phsb5321
+/tests/vendor/                                @phsb5321
+
+# Release + CI infrastructure
+/.github/workflows/                           @phsb5321
+/scripts/build-release.sh                     @phsb5321
+/scripts/verify-vendor.sh                     @phsb5321
+
+# Docs that define security contract
+/docs/THREAT-MODEL.md                         @phsb5321
+/docs/HAPPY-DOM-FIDELITY.md                   @phsb5321
+/SECURITY.md                                  @phsb5321
+/COMPLIANCE.md                                @phsb5321

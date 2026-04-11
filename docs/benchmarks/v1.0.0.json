@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "measured_at": "UNSET_UNTIL_TAG",
+  "host": "UNSET_UNTIL_TAG",
+  "comment": "Populated by tests/bench/run.sh on the v1.0.0 tag commit. Serves as the baseline p95 SLOs for future regression detection. Any future tag that regresses >20% on any metric fails its release via .github/workflows/bench.yml.",
+  "slo_targets": {
+    "fingerprint_cached": { "p95_ms": 10 },
+    "fingerprint_cold":   { "p95_ms": 120 },
+    "window_for":         { "p95_ms": 80 },
+    "tab_for_url":        { "p95_ms": 100 },
+    "click_dry":          { "p95_ms": 150 },
+    "js_roundtrip":       { "p95_ms": 90 }
+  }
+}

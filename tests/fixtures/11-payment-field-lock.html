@@ -1,0 +1,16 @@
+<!--
+  target_rail: payment_field_lock
+  isolation_proof: Target button text is benign. Page contains an
+    <input autocomplete="cc-number"> elsewhere. The payment_field_lock
+    rail MUST fire because ANY payment field on the page disables ALL
+    clicks as a safety net — even on unrelated buttons.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 11 — payment field lock</title></head>
+  <body>
+    <input type="text" autocomplete="cc-number" placeholder="Card number">
+    <button id="target">Mark as read</button>
+  </body>
+</html>

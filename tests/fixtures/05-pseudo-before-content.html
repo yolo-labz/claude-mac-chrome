@@ -1,0 +1,20 @@
+<!--
+  target_rail: purchase_button_text_depth_0 (via ::before content)
+  isolation_proof: Button textContent is empty. Label is injected via
+    CSS `::before { content: "Subscribe" }`. Requires getComputedStyle
+    pseudo-element reader. STUBBED in happy-dom (NFR-V2-SAFETY-3) and
+    authoritative in Playwright integration.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head>
+    <title>Test 05 — pseudo ::before</title>
+    <style>
+      #target::before { content: "Subscribe"; }
+    </style>
+  </head>
+  <body>
+    <button id="target"></button>
+  </body>
+</html>

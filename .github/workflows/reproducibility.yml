@@ -1,0 +1,56 @@
+name: Reproducibility
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "scripts/build-release.sh"
+      - "skills/**"
+      - ".github/workflows/reproducibility.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-twice:
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Install gnu-tar + diffoscope
+        run: brew install gnu-tar diffoscope
+      - name: First deterministic build
+        run: bash scripts/build-release.sh /tmp/release-1.tar.gz
+      - name: Second deterministic build (fresh mtimes)
+        run: |
+          # Force a delay + filesystem touch to stress-test reproducibility
+          sleep 2
+          find . -type f -not -path "./.git/*" -exec touch {} + || true
+          bash scripts/build-release.sh /tmp/release-2.tar.gz
+      - name: Compare SHA-256
+        run: |
+          sha1=$(shasum -a 256 /tmp/release-1.tar.gz | awk '{print $1}')
+          sha2=$(shasum -a 256 /tmp/release-2.tar.gz | awk '{print $1}')
+          echo "Build 1: $sha1"
+          echo "Build 2: $sha2"
+          if [ "$sha1" != "$sha2" ]; then
+            echo "FATAL: reproducibility broken"
+            diffoscope /tmp/release-1.tar.gz /tmp/release-2.tar.gz || true
+            exit 1
+          fi
+          echo "PASS: byte-identical builds"
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: repro-debug
+          path: |
+            /tmp/release-1.tar.gz
+            /tmp/release-2.tar.gz

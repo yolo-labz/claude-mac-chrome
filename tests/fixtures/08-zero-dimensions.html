@@ -1,0 +1,15 @@
+<!--
+  target_rail: zero_dimensions (STUBBED — NFR-V2-SAFETY-2)
+  isolation_proof: Benign button forced to 0x0 via inline CSS.
+    getBoundingClientRect must return width<1 && height<1. Happy-dom
+    returns {0,0,0,0} for all elements by default, so harness stub reads
+    rect from fixture.json sidecar. Playwright is authoritative.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 08 — zero dimensions</title></head>
+  <body>
+    <button id="target" style="width:0;height:0;padding:0;border:0;">Mark as read</button>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "element_found": true,
+  "blocked_reason": "payment_field_lock",
+  "evidence": { "cc_field_selector": "input[autocomplete*=\"cc-\"]" },
+  "fired_rail_trace": ["element_lookup", "ancestor_text_walk", "payment_field_lock"],
+  "selector": "#target"
+}

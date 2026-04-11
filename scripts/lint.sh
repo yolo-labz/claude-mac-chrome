@@ -10,7 +10,7 @@
 #   - bash 4.0+
 #   - shfmt (https://github.com/mvdan/sh) — brew install shfmt, or nix
 #   - shellcheck — brew install shellcheck, or nix
-#   - python3 (stdlib only, no pip install needed)
+#   - jq (https://jqlang.github.io/jq/) — brew install jq, or nix
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -90,6 +90,88 @@ else
   skip "shellcheck: not found (install via 'brew install shellcheck' or 'nix-shell -p shellcheck')"
 fi
 
+# ---- zero-Python check (v0.4.0) ----
+step "zero-Python heredoc check"
+python_count=$(grep -c 'python3 <<\|python3 -c' "$LIB" || true)
+if [[ "$python_count" -eq 0 ]]; then
+  ok "zero Python heredocs in chrome-lib.sh"
+else
+  err "found $python_count Python heredoc(s) — v0.4.0 requires full elimination"
+fi
+
+# ---- v0.8.0 forbidden pattern check ----
+step "v0.8.0 forbidden-pattern check (eval, form.submit)"
+if grep -nE '\beval\b' "$LIB" | grep -v '^[[:space:]]*#' > /dev/null 2>&1; then
+  err "eval found in chrome-lib.sh — forbidden"
+else
+  ok "no eval found"
+fi
+if grep -nE 'form\.submit\(\)' "$LIB" > /dev/null 2>&1; then
+  err "form.submit() found in chrome-lib.sh — forbidden by NFR-SR-4"
+else
+  ok "no form.submit() found"
+fi
+
+# ---- v0.8.0 safety helper presence check ----
+step "v0.8.0 safety helper presence"
+required_helpers=(
+  "_chrome_check_url_blocklist"
+  "_chrome_load_trigger_lexicon"
+  "_chrome_rate_check"
+  "_chrome_audit_append"
+  "_chrome_tty_confirm"
+  "_chrome_prompt_injection_scan"
+  "_chrome_check_domain_allowlist"
+  "_chrome_safety_check_js"
+  "chrome_click"
+  "chrome_query"
+  "chrome_wait_for"
+)
+missing_helpers=0
+for helper in "${required_helpers[@]}"; do
+  if ! grep -q "^${helper}()" "$LIB"; then
+    err "missing required v0.8.0 helper: $helper"
+    missing_helpers=$((missing_helpers + 1))
+  fi
+done
+if ((missing_helpers == 0)); then
+  ok "all v0.8.0 safety helpers present"
+fi
+
+# ---- Happy-DOM fidelity lint (feature 006 T014) ----
+step "happy-dom fidelity matrix coverage"
+fidelity_doc="$REPO_ROOT/docs/HAPPY-DOM-FIDELITY.md"
+if [[ -f "$fidelity_doc" ]]; then
+  # Extract DOM API calls inside _chrome_safety_check_js body
+  js_apis=$(awk '/^_chrome_safety_check_js\(\)/,/^}/' "$LIB" |
+    grep -oE '(getBoundingClientRect|getComputedStyle|elementFromPoint|showModal|querySelector|querySelectorAll|shadowRoot|closest|getAttribute|textContent|innerText|offsetParent|offsetWidth|offsetHeight|readyState|visibilityState|MutationObserver|normalize)' |
+    sort -u)
+  missing_doc=0
+  for api in $js_apis; do
+    if ! grep -q "\`.*$api.*\`" "$fidelity_doc"; then
+      err "DOM API '$api' used in safety JS but not in HAPPY-DOM-FIDELITY.md"
+      missing_doc=$((missing_doc + 1))
+    fi
+  done
+  if ((missing_doc == 0)); then
+    ok "all DOM APIs documented in fidelity matrix"
+  fi
+else
+  skip "HAPPY-DOM-FIDELITY.md not found"
+fi
+
+# ---- Fixture determinism lint (feature 006 T063) ----
+step "fixture determinism (no Math.random / Date.now / crypto.randomUUID)"
+if [[ -d "$REPO_ROOT/tests/fixtures" ]]; then
+  banned_pattern='Math\.random|Date\.now|crypto\.randomUUID|performance\.now'
+  if grep -rE "$banned_pattern" "$REPO_ROOT/tests/fixtures" > /dev/null 2>&1; then
+    err "non-deterministic API found in fixtures — breaks golden reproducibility"
+    grep -rnE "$banned_pattern" "$REPO_ROOT/tests/fixtures" || true
+  else
+    ok "fixtures are deterministic"
+  fi
+fi
+
 # ---- smoke test ----
 step "smoke test (requires Chrome running with Apple Events JS permission)"
 if [[ "$OSTYPE" != "darwin"* ]]; then
@@ -97,25 +179,19 @@ if [[ "$OSTYPE" != "darwin"* ]]; then
 elif ! command -v osascript > /dev/null 2>&1; then
   ok "skipped (osascript not available)"
 else
-  if "$LIB" catalog | python3 -m json.tool > /dev/null 2>&1; then
+  if "$LIB" catalog | jq . > /dev/null 2>&1; then
     ok "catalog: valid JSON"
   else
     err "catalog: failed to parse Local State"
   fi
-  if "$LIB" fingerprint | python3 -m json.tool > /dev/null 2>&1; then
+  if "$LIB" fingerprint | jq . > /dev/null 2>&1; then
     ok "fingerprint: valid JSON output"
   else
     err "fingerprint: failed"
   fi
-  wid=$("$LIB" cached 2> /dev/null | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    vs = list(d.get("by_dir", {}).values())
-    print(vs[0] if vs else "")
-except Exception:
-    pass
-' || true)
+  wid=$("$LIB" cached 2> /dev/null | jq -r '
+    (.by_dir // {} | to_entries | .[0].value // empty)
+  ' 2> /dev/null || true)
   if [[ -n "${wid:-}" ]]; then
     tid=$("$LIB" tab_for_url "$wid" "://" 2> /dev/null || true)
     if [[ -n "${tid:-}" ]]; then
@@ -130,6 +206,18 @@ except Exception:
   else
     ok "no matched window (Chrome may not be running or no email-bearing tab open)"
   fi
+fi
+
+# ---- test suite wiring (feature 006 T066) ----
+step "tests/run.sh (bats + js-fixtures + mutation)"
+if [[ -x "$REPO_ROOT/tests/run.sh" ]]; then
+  if "$REPO_ROOT/tests/run.sh"; then
+    ok "tests/run.sh: all stages passed"
+  else
+    err "tests/run.sh: one or more stages failed"
+  fi
+else
+  skip "tests/run.sh not found or not executable"
 fi
 
 # ---- summary ----

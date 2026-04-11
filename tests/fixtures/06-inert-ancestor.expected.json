@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "element_found": true,
+  "blocked_reason": "inert_container",
+  "evidence": {
+    "closest_match": "dialog:not([open])"
+  },
+  "fired_rail_trace": ["element_lookup", "ancestor_text_walk", "payment_field_lock", "inert_container"],
+  "selector": "#target"
+}

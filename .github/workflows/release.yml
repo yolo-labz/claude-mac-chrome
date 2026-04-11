@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install test deps
+        run: brew install bats-core shellcheck shfmt jq gnu-tar
+      - name: Run full test suite
+        run: bash scripts/lint.sh
+
+  build:
+    needs: test
+    runs-on: macos-15
+    permissions:
+      contents: read
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install build deps
+        run: brew install gnu-tar jq
+      - name: Build deterministic tarball
+        run: bash scripts/build-release.sh dist/claude-mac-chrome.tar.gz
+      - name: Compute hashes
+        id: hash
+        run: |
+          cd dist
+          shasum -a 256 claude-mac-chrome.tar.gz > SHA256SUMS
+          b64=$(shasum -a 256 claude-mac-chrome.tar.gz | base64 -w0 2>/dev/null || shasum -a 256 claude-mac-chrome.tar.gz | base64)
+          printf 'hashes=%s\n' "$b64" >> "$GITHUB_OUTPUT"
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: release-dist
+          path: dist/
+          retention-days: 7
+
+  sbom:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate CycloneDX 1.7 SBOM
+        uses: anchore/sbom-action@df80a981bc6edbc4e220a492d3cbe9f5547a6e75 # v0.17.9
+        with:
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  provenance:
+    needs: [build]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.hashes }}"
+      upload-assets: true
+
+  sign-and-release:
+    needs: [build, sbom, provenance]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: release-dist
+          path: dist/
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: sbom
+          path: dist/
+      - name: Install cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+      - name: Sign tarball (keyless OIDC)
+        run: |
+          cd dist
+          cosign sign-blob --yes \
+            --bundle claude-mac-chrome.tar.gz.sigstore \
+            claude-mac-chrome.tar.gz
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191 # v2.0.8
+        with:
+          files: |
+            dist/claude-mac-chrome.tar.gz
+            dist/SHA256SUMS
+            dist/claude-mac-chrome.tar.gz.sigstore
+            dist/sbom.cdx.json
+          generate_release_notes: true

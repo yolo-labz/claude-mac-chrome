@@ -1,0 +1,18 @@
+<!--
+  target_rail: purchase_button_text_depth_0
+  isolation_proof: The only trigger-lexicon word on this page is "Upgrade"
+    inside the button's own textContent. No ancestor text matches, no
+    attributes match, no payment fields, no inert container, no visibility
+    issues. If this fixture fires any rail OTHER than
+    purchase_button_text_depth_0, the rail is leaking.
+  last_reviewed: 2026-04-11
+-->
+<!doctype html>
+<html>
+  <head><title>Test 01 — plain upgrade button</title></head>
+  <body>
+    <h1>Account settings</h1>
+    <p>Click the button to change your plan.</p>
+    <button id="target">Upgrade</button>
+  </body>
+</html>

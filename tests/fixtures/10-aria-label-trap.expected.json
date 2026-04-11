@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "element_found": true,
+  "blocked_reason": "purchase_button_attr_aria-label_depth_0",
+  "evidence": {
+    "match_attr": "aria-label",
+    "match_text": "Purchase Now",
+    "match_depth": 0
+  },
+  "fired_rail_trace": ["element_lookup", "ancestor_text_walk"],
+  "selector": "#target"
+}

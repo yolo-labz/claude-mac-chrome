@@ -1,0 +1,13 @@
+{
+  "version": "0.9.0-dev",
+  "measured_at": "2026-04-11T17:30:32Z",
+  "host": "Pedros-MacBook-Pro arm64",
+  "results": {
+  "fingerprint_cached": { "p50_ms": 109, "p95_ms": 163, "p99_ms": 248, "samples": 50 },
+  "fingerprint_cold": { "p50_ms": 1326, "p95_ms": 1903, "p99_ms": 1903, "samples": 10 },
+  "window_for": { "p50_ms": 122, "p95_ms": 223, "p99_ms": 223, "samples": 20 },
+  "tab_for_url": { "p50_ms": 131, "p95_ms": 166, "p99_ms": 166, "samples": 20 },
+  "click_dry": { "p50_ms": 20, "p95_ms": 30, "p99_ms": 30, "samples": 20 },
+    "_end": true
+  }
+}
