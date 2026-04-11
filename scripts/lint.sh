@@ -174,37 +174,45 @@ fi
 
 # ---- smoke test ----
 step "smoke test (requires Chrome running with Apple Events JS permission)"
+chrome_local_state="${HOME}/Library/Application Support/Google/Chrome/Local State"
 if [[ "$OSTYPE" != "darwin"* ]]; then
   ok "skipped (not macOS)"
 elif ! command -v osascript > /dev/null 2>&1; then
   ok "skipped (osascript not available)"
+elif [[ ! -f "$chrome_local_state" ]]; then
+  ok "skipped (no Chrome Local State — clean CI runner or fresh user)"
 else
   if "$LIB" catalog | jq . > /dev/null 2>&1; then
     ok "catalog: valid JSON"
   else
     err "catalog: failed to parse Local State"
   fi
-  if "$LIB" fingerprint | jq . > /dev/null 2>&1; then
-    ok "fingerprint: valid JSON output"
-  else
-    err "fingerprint: failed"
-  fi
-  wid=$("$LIB" cached 2> /dev/null | jq -r '
-    (.by_dir // {} | to_entries | .[0].value // empty)
-  ' 2> /dev/null || true)
-  if [[ -n "${wid:-}" ]]; then
-    tid=$("$LIB" tab_for_url "$wid" "://" 2> /dev/null || true)
-    if [[ -n "${tid:-}" ]]; then
-      if "$LIB" js "$wid" "$tid" "1 + 1" > /dev/null 2>&1; then
-        ok "js round-trip: OK"
+  # Only run fingerprint + live checks if Chrome is actually running
+  if pgrep -xq "Google Chrome" 2> /dev/null; then
+    if "$LIB" fingerprint | jq . > /dev/null 2>&1; then
+      ok "fingerprint: valid JSON output"
+    else
+      err "fingerprint: failed"
+    fi
+    wid=$("$LIB" cached 2> /dev/null | jq -r '
+      (.by_dir // {} | to_entries | .[0].value // empty)
+    ' 2> /dev/null || true)
+    if [[ -n "${wid:-}" ]]; then
+      tid=$("$LIB" tab_for_url "$wid" "://" 2> /dev/null || true)
+      if [[ -n "${tid:-}" ]]; then
+        if "$LIB" js "$wid" "$tid" "1 + 1" > /dev/null 2>&1; then
+          ok "js round-trip: OK"
+        else
+          err "js round-trip: failed"
+        fi
       else
-        err "js round-trip: failed"
+        ok "tab_for_url: no tab matched (fine for a clean profile)"
       fi
     else
-      ok "tab_for_url: no tab matched (fine for a clean profile)"
+      ok "no matched window (no email-bearing tab open)"
     fi
   else
-    ok "no matched window (Chrome may not be running or no email-bearing tab open)"
+    ok "Chrome not running — skipped live fingerprint + js round-trip"
   fi
 fi
 

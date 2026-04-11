@@ -974,14 +974,15 @@ readonly -a CHROME_URL_BLOCKLIST=(
 )
 
 # Check if a URL matches any blocklist pattern. Returns 0 (match/blocked),
-# 1 (clear). Uses bash `case` glob matching.
+# 1 (clear). Uses `[[ == pattern ]]` which is consistent across bash 3.2
+# (macOS system bash) through 5.3 regardless of shell option state.
 _chrome_check_url_blocklist() {
   local url="$1" pattern
   for pattern in "${CHROME_URL_BLOCKLIST[@]}"; do
-    # shellcheck disable=SC2254
-    case "$url" in
-      $pattern) return 0 ;;
-    esac
+    # shellcheck disable=SC2053
+    if [[ "$url" == $pattern ]]; then
+      return 0
+    fi
   done
   return 1
 }
