@@ -5,12 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0-rc1] — 2026-04-11 — Release Candidate
+## [1.0.0] — 2026-04-11 — General Availability
 
-First release candidate for v1.0.0 General Availability. All test harness
-infrastructure is live and passing (happy-dom 14/14 green, shellcheck clean,
-reproducible build verified). Remaining ceremony: sign tag, push, verify
-cosign/SBOM/SLSA, marketplace submission, announcement.
+First stable release. All test harness infrastructure is live and passing
+(happy-dom 14/14 green, bats 95/95 green, shellcheck clean, reproducible
+build verified byte-identical across runs, CI green on all 4 workflows:
+reproducibility, nix flake check, osv-scan, sonar).
 
 ### 0.x branch EOL notice
 
@@ -19,7 +19,13 @@ SECURITY.md for the support matrix. Security fixes only until that date; no
 feature backports. Upgrade path: `docs/MIGRATION-0.x-to-1.0.md` (no breaking
 changes to public API — safe upgrade).
 
-## [1.0.0] — Planned (v1.0.0 General Availability)
+## [1.0.0-rc1] — 2026-04-11 — Release Candidate
+
+First release candidate. Promoted to stable 1.0.0 after CI gate passed.
+All content of this RC is identical to 1.0.0 GA except for the version
+string in `.claude-plugin/plugin.json`.
+
+## [1.0.0 — details] — General Availability details
 
 ### Added
 

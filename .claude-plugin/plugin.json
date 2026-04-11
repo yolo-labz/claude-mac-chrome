@@ -1,6 +1,6 @@
 {
   "name": "claude-mac-chrome",
-  "version": "1.0.0-rc1",
+  "version": "1.0.0",
   "description": "Professional Chrome automation for Claude Code on macOS. Deterministic multi-profile detection via Chrome's authoritative Local State catalog, email extraction from tab titles, and same-email disambiguation via SNSS Sessions/Tabs URL-set overlap. Addresses windows and tabs by stable AppleScript string IDs. Zero user configuration, zero dependencies, shellcheck + shfmt clean.",
   "author": {
     "name": "Pedro Henrique Souza Balbino",
