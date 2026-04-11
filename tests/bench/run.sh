@@ -57,21 +57,28 @@ bench_one() {
     "$name" "${sorted[$p50_idx]}" "${sorted[$p95_idx]}" "${sorted[$p99_idx]}" "$count"
 }
 
+chrome_local_state="${HOME}/Library/Application Support/Google/Chrome/Local State"
+
 {
   printf '{\n'
   printf '  "version": "%s",\n' "$version"
   printf '  "measured_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '  "host": "%s",\n' "$(uname -mn)"
   printf '  "results": {\n'
-  bench_one "fingerprint_cached" 50 chrome_fingerprint_cached
-  bench_one "fingerprint_cold"   10 chrome_fingerprint
-  # The live Chrome-coupled ops require an open Chrome; gate them
-  if pgrep -q "Google Chrome" 2> /dev/null; then
-    bench_one "window_for"    20 chrome_window_for default
-    bench_one "tab_for_url"   20 chrome_tab_for_url 0 about:blank
-    bench_one "click_dry"     20 chrome_click --dry-run 0 0 "#nonexistent"
+
+  if [[ ! -f "$chrome_local_state" ]]; then
+    printf '    "_note": "skipped — no Chrome Local State (clean CI runner or no Chrome installed)",\n'
+  else
+    bench_one "fingerprint_cached" 50 chrome_fingerprint_cached
+    bench_one "fingerprint_cold"   10 chrome_fingerprint
+    # The live Chrome-coupled ops require an open Chrome; gate them
+    if pgrep -xq "Google Chrome" 2> /dev/null; then
+      bench_one "window_for"    20 chrome_window_for default
+      bench_one "tab_for_url"   20 chrome_tab_for_url 0 about:blank
+      bench_one "click_dry"     20 chrome_click --dry-run 0 0 "#nonexistent"
+    fi
   fi
-  # Trim trailing comma
+
   printf '    "_end": true\n'
   printf '  }\n'
   printf '}\n'
