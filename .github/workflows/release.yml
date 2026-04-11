@@ -14,10 +14,14 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install test deps
-        run: brew install bats-core shellcheck shfmt jq gnu-tar
-      - name: Run full test suite
-        run: bash scripts/lint.sh
+      - name: Install test deps (incl. modern bash — macOS ships bash 3.2)
+        run: brew install bash bats-core shellcheck shfmt jq gnu-tar
+      - name: Run full test suite under modern bash
+        run: |
+          echo "system bash: $(/bin/bash --version | head -n1)"
+          echo "brew bash:   $(/opt/homebrew/bin/bash --version | head -n1 || /usr/local/bin/bash --version | head -n1)"
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          bash scripts/lint.sh
 
   build:
     needs: test
