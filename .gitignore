@@ -17,3 +17,9 @@
 # Local notes not intended for publication
 NOTES.local.md
 TODO.local.md
+
+# AI development artifacts (never publish)
+CLAUDE.md
+HANDOFF.md
+.specify/
+.claude/
