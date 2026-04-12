@@ -298,7 +298,7 @@ See [SECURITY.md](SECURITY.md) for the disclosure policy and release verificatio
 
 Highlights:
 - 15-layer safety gauntlet on `chrome_click` (URL blocklist, trigger lexicon with pt-BR, Unicode normalization + zero-width strip, shadow DOM walker, pseudo-element extractor, payment field lock, inert container check, visibility + zero-dim check, clickjack hit-test, rate limiter, audit log, TTY confirm, prompt injection scanner, domain allowlist, 3-ancestor attribute walk)
-- Signed releases: cosign keyless + SLSA L3 + CycloneDX 1.7 SBOM
+- Signed releases: cosign keyless + SLSA L3 + CycloneDX 1.7 + SPDX 2.3 SBOMs
 - Reproducible builds verified byte-by-byte in CI
 - Weekly OSV-Scanner on vendored dependencies
 - OpenSSF Scorecard ≥ 7.0
@@ -314,10 +314,28 @@ Highlights:
 
 ## Verifying releases
 
+The simplest way to verify a release is with the GitHub CLI (`gh >= 2.49.0`):
+
+```bash
+# Download the release tarball
+curl -sLO https://github.com/yolo-labz/claude-mac-chrome/releases/latest/download/claude-mac-chrome.tar.gz
+
+# Verify provenance attestation (checks Sigstore signature + SLSA provenance)
+gh attestation verify ./claude-mac-chrome.tar.gz \
+  --repo yolo-labz/claude-mac-chrome \
+  --signer-workflow yolo-labz/claude-mac-chrome/.github/workflows/release.yml
+```
+
+If verification fails, **do not install**. File a security advisory.
+
+### Advanced / Offline verification
+
+For environments without `gh`, you can verify using cosign or slsa-verifier directly:
+
 ```bash
 # Download the release and its signature bundle
-curl -sLO https://github.com/yolo-labz/claude-mac-chrome/releases/download/v1.0.0/claude-mac-chrome.tar.gz
-curl -sLO https://github.com/yolo-labz/claude-mac-chrome/releases/download/v1.0.0/claude-mac-chrome.tar.gz.sigstore
+curl -sLO https://github.com/yolo-labz/claude-mac-chrome/releases/latest/download/claude-mac-chrome.tar.gz
+curl -sLO https://github.com/yolo-labz/claude-mac-chrome/releases/latest/download/claude-mac-chrome.tar.gz.sigstore
 
 # Verify the cosign keyless signature
 cosign verify-blob \
@@ -326,8 +344,6 @@ cosign verify-blob \
   --bundle claude-mac-chrome.tar.gz.sigstore \
   claude-mac-chrome.tar.gz
 ```
-
-If verification fails, **do not install**. File a security advisory.
 
 ## License
 
