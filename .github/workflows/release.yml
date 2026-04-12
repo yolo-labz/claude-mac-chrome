@@ -44,7 +44,7 @@ jobs:
           b64=$(shasum -a 256 claude-mac-chrome.tar.gz | base64 -w0 2>/dev/null || shasum -a 256 claude-mac-chrome.tar.gz | base64)
           printf 'hashes=%s\n' "$b64" >> "$GITHUB_OUTPUT"
       - name: Upload dist artifact
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-dist
           path: dist/
@@ -62,7 +62,7 @@ jobs:
       - name: Generate CycloneDX 1.7 + SPDX 2.3 SBOMs
         run: syft . -o cyclonedx-json@1.7=sbom.cdx.json -o spdx-json=sbom.spdx.json
       - name: Upload SBOMs
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom
           path: |

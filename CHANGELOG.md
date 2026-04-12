@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-04-12 — Supply Chain Hardening
+
+### Added
+
+- **CycloneDX 1.7** (ECMA-424) SBOM replacing CycloneDX 1.6 in release pipeline
+- **SPDX 2.3** as second SBOM format alongside CycloneDX (`sbom.spdx.json`)
+- **`gh attestation verify`** promoted to primary verification method in README
+- **ClusterFuzzLite** layout (`.clusterfuzzlite/` + `cflite_pr.yml` + `cflite_cron.yml`) for Scorecard Fuzzing detection
+- **Repository Ruleset** (`main-protection`) replacing classic branch protection — PR review, linear history, status checks
+- **CodeQL SAST** workflow scanning GitHub Actions + JavaScript/TypeScript
+- **Pre-commit hooks** — zizmor (workflow security), actionlint (workflow lint), shellcheck, shfmt
+- **CONTRIBUTING.md** — dev loop, bash 3.2 compatibility, conventional commits, fixture golden ceremony
+
+### Changed
+
+- `upload-artifact` bumped v4.4.3 → v7.0.1 across all workflows
+- `setup-node` bumped v4.1.0 → v6.3.0 across all workflows
+- `download-artifact` bumped v4.1.8 → v8.0.1 (via Dependabot)
+- `actions/checkout` bumped v4.2.2 → v6.0.2 (via Dependabot)
+- `actions/github-script` bumped v7.0.1 → v9.0.0 (via Dependabot)
+- `sigstore/cosign-installer` bumped v3.7.0 → v4.1.1 (via Dependabot)
+- `anchore/sbom-action` bumped v0.17.9 → v0.24.0 (via Dependabot)
+- Playwright `1.48.2 → 1.59.1`, TypeScript `5.6.3 → 6.0.2` in integration suite
+- Classic branch protection deleted; Repository Ruleset is the sole enforcement
+
+### Security
+
+- cosign/slsa-verifier moved to "Advanced / Offline" README section; `gh attestation verify` is now the recommended verification path (works offline with `--bundle`)
+- OpenSSF Scorecard 7.1+ maintained
+
 ## [1.0.0] — 2026-04-11 — General Availability
 
 First stable release. All test harness infrastructure is live and passing
