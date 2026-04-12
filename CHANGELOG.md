@@ -103,7 +103,7 @@ string in `.claude-plugin/plugin.json`.
   - `docs/scorecard-targets.md` — per-check Scorecard target matrix
   - `SECURITY.md` — disclosure SLA (72h/7d/30/90d) + release key compromise playbook
   - README.md expanded with Troubleshooting (10 entries), FAQ (8 entries), Security, Privacy, Verifying Releases sections
-  - CLAUDE.md hard rules: never ship a v-prefixed tag with failing `tests/run.sh`, never add CDP/extensions/throwaway profiles
+  - Development guidelines enforcing: never ship a v-prefixed tag with failing `tests/run.sh`, never add CDP/extensions/throwaway profiles
 
 ### Changed
 
@@ -155,7 +155,7 @@ string in `.claude-plugin/plugin.json`.
 - Audit log rotation at 10MB with `flock` + `chflags uappnd` append-only enforcement.
 - Element fingerprint stability check across check → dispatch window (TOCTOU).
 - Auto-trigger skills + slash commands.
-- Hard rule addition to CLAUDE.md.
+- Hard rule addition to development guidelines.
 
 **Version remains `0.8.0-dev`. DO NOT ship as v0.8.0 GA until deferred items complete.**
 
