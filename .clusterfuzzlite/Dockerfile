@@ -1,4 +1,4 @@
-FROM node:20-bookworm AS builder
+FROM node:20-bookworm@sha256:8789e1e0752d81088a085689c04fdb7a5b16e8102e353118a4b049bbf05db8ac AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash jq radamsa \

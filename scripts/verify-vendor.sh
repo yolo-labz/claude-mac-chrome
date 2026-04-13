@@ -76,7 +76,7 @@ cd "happy-dom-$commit/packages/happy-dom"
 echo "Building deterministic bundle..."
 npm install --silent
 SOURCE_DATE_EPOCH=1700000000 \
-  npx esbuild --bundle src/index.ts \
+  ./node_modules/.bin/esbuild --bundle src/index.ts \
   --format=esm \
   --platform=neutral \
   --target=es2022 \
