@@ -407,6 +407,18 @@ chrome_window_for() {
       local wid_for_dir
       wid_for_dir=$(printf '%s' "$fp" | jq -r --arg d "$result" '.by_dir[$d] // empty')
       [[ -n "$wid_for_dir" ]] && printf '%s' "$wid_for_dir"
+      return
+    fi
+
+    # Fallback: search the "unknown" bucket (windows matched by tab-title
+    # email that doesn't correspond to any catalog profile — e.g. Proton
+    # email in a window whose profile is registered under Gmail).
+    result=$(printf '%s' "$fp" | jq -r --arg rl "$rl" '
+      (.unknown // {}) | to_entries[] |
+      select(.key | ascii_downcase | contains($rl)) | .value
+    ' 2> /dev/null | head -1)
+    if [[ -n "$result" ]]; then
+      printf '%s' "$result"
     fi
   }
 
