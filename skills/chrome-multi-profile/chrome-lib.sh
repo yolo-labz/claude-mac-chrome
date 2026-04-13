@@ -149,6 +149,56 @@ APPLESCRIPT
 }
 
 # ---------------------------------------------------------------------------
+# Tier 2b — Window given names (Chrome M118+ feature 001)
+# ---------------------------------------------------------------------------
+# Output format (tab-delimited, one row per window):
+#   window_id \t given_name
+# Given names prefixed with "cmc:" are authoritative identity labels set by
+# this library. Format: "cmc:<profile_dir>" (e.g., "cmc:Default").
+# Persists across Chrome restarts when "Continue where you left off" is on.
+_chrome_window_given_names() {
+  osascript << 'APPLESCRIPT'
+tell application "Google Chrome"
+  set out to ""
+  repeat with w in windows
+    set wid to id of w
+    try
+      set gn to given name of w
+    on error
+      set gn to ""
+    end try
+    set out to out & wid & "	" & gn & linefeed
+  end repeat
+  return out
+end tell
+APPLESCRIPT
+}
+
+# Register a window with a given name label for persistent identity.
+# Usage: chrome_register_window <window_id> <profile_dir>
+# The given name is visible in the window title bar and persists across
+# restarts. Uses "cmc:" prefix to distinguish from user-set names.
+chrome_register_window() {
+  local wid="$1" profile_dir="$2"
+  [[ -z "$wid" || -z "$profile_dir" ]] && {
+    _chrome_err "usage: chrome_register_window <window_id> <profile_dir>"
+    return 1
+  }
+  local label="cmc:${profile_dir}"
+  osascript -e "tell application \"Google Chrome\" to set given name of window id $wid to \"$label\"" 2> /dev/null || {
+    _chrome_err "failed to set given name on window $wid (requires Chrome M118+)"
+    return 1
+  }
+}
+
+# Unregister a window's identity label (clears given name).
+chrome_unregister_window() {
+  local wid="$1"
+  [[ -z "$wid" ]] && return 1
+  osascript -e "tell application \"Google Chrome\" to set given name of window id $wid to \"\"" 2> /dev/null
+}
+
+# ---------------------------------------------------------------------------
 # Core fingerprint — multi-signal deterministic profile detection
 # ---------------------------------------------------------------------------
 # Pipeline:
@@ -182,9 +232,10 @@ APPLESCRIPT
 #     "catalog": {...}
 #   }
 chrome_fingerprint() {
-  local catalog_json windows_raw
+  local catalog_json windows_raw given_names_raw
   catalog_json=$(chrome_profiles_catalog)
   windows_raw=$(chrome_windows_raw)
+  given_names_raw=$(_chrome_window_given_names)
 
   if ! command -v jq > /dev/null 2>&1; then
     _chrome_err "jq is required but not found. Install via: brew install jq"
@@ -201,6 +252,16 @@ chrome_fingerprint() {
     from_entries
   ')
 
+  # Step A2 (feature 001): parse given names — cmc:<profile_dir> is authoritative
+  local -A given_name_map  # window_id → profile_dir (only for cmc: entries)
+  local gn_line gn_wid gn_val
+  while IFS=$'\t' read -r gn_wid gn_val; do
+    [[ -z "$gn_wid" ]] && continue
+    if [[ "$gn_val" == cmc:* ]]; then
+      given_name_map["$gn_wid"]="${gn_val#cmc:}"
+    fi
+  done <<< "$given_names_raw"
+
   # Step B: parse raw windows dump, extract emails from tab titles
   local assignments_json="{}"
   local by_dir="{}" by_name="{}" by_email="{}" unknown="{}"
@@ -211,7 +272,6 @@ chrome_fingerprint() {
   window_ids=$(printf '%s' "$windows_raw" | cut -f1 | sort -u)
 
   if [[ -z "$window_ids" ]]; then
-    # No windows found
     jq -n --argjson catalog "$catalog_json" '{
       by_dir: {}, by_name: {}, by_email: {},
       unknown: {}, assignments: {}, catalog: $catalog
@@ -225,6 +285,22 @@ chrome_fingerprint() {
   local wid
   for wid in "${wid_array[@]}"; do
     [[ -z "$wid" ]] && continue
+
+    # Feature 001: if window has a cmc: given name, that's authoritative
+    if [[ -n "${given_name_map[$wid]:-}" ]]; then
+      matched_dir="${given_name_map[$wid]}"
+      method="given_name"
+      local meta_name meta_email
+      meta_name=$(printf '%s' "$catalog_json" | jq -r --arg d "$matched_dir" '.[$d].name // $d')
+      meta_email=$(printf '%s' "$catalog_json" | jq -r --arg d "$matched_dir" '.[$d].user_name // ""')
+      assignments_json=$(printf '%s' "$assignments_json" | jq --arg w "$wid" --arg pd "$matched_dir" \
+        --arg name "$meta_name" --arg email "$meta_email" --arg method "$method" \
+        '. + {($w): {profile_dir: $pd, name: $name, email: $email, method: $method, score: null}}')
+      by_dir=$(printf '%s' "$by_dir" | jq --arg pd "$matched_dir" --arg w "$wid" '. + {($pd): $w}')
+      by_name=$(printf '%s' "$by_name" | jq --arg name "$meta_name" --arg w "$wid" '. + {($name): $w}')
+      by_email=$(printf '%s' "$by_email" | jq --arg email "$meta_email" --arg w "$wid" 'if $email != "" then . + {($email): $w} else . end')
+      continue
+    fi
 
     # Extract tab titles for this window, find emails via grep
     local tab_titles
@@ -268,6 +344,8 @@ chrome_fingerprint() {
       by_dir=$(printf '%s' "$by_dir" | jq --arg pd "$matched_dir" --arg w "$wid" '. + {($pd): $w}')
       by_name=$(printf '%s' "$by_name" | jq --arg name "$meta_name" --arg w "$wid" '. + {($name): $w}')
       by_email=$(printf '%s' "$by_email" | jq --arg email "$meta_email" --arg w "$wid" 'if $email != "" then . + {($email): $w} else . end')
+      # Feature 001: auto-register on successful email match (write-on-resolve)
+      chrome_register_window "$wid" "$matched_dir" 2> /dev/null || true
     elif [[ "$candidate_count" -eq 0 ]]; then
       # No email match — record as no_signal
       local first_email
@@ -279,7 +357,6 @@ chrome_fingerprint() {
       fi
     else
       # Multiple candidates — same-email collision, assign first match for now
-      # (v0.4.0 will add AX avatar + URL overlap for proper disambiguation)
       matched_dir=$(printf '%s' "$candidates" | sed '/^$/d' | head -1)
       method="email_tab"
       local meta_name meta_email
@@ -291,6 +368,8 @@ chrome_fingerprint() {
       by_dir=$(printf '%s' "$by_dir" | jq --arg pd "$matched_dir" --arg w "$wid" '. + {($pd): $w}')
       by_name=$(printf '%s' "$by_name" | jq --arg name "$meta_name" --arg w "$wid" '. + {($name): $w}')
       by_email=$(printf '%s' "$by_email" | jq --arg email "$meta_email" --arg w "$wid" 'if $email != "" then . + {($email): $w} else . end')
+      # Feature 001: auto-register on resolution
+      chrome_register_window "$wid" "$matched_dir" 2> /dev/null || true
     fi
   done
 
@@ -1910,6 +1989,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     check_inboxes) chrome_check_inboxes ;;
     snapshot) chrome_snapshot "$@" ;;
     restore) chrome_restore "$@" ;;
+    register_window) chrome_register_window "$@" ;;
+    unregister_window) chrome_unregister_window "$@" ;;
     click) chrome_click "$@" ;;
     query) chrome_query "$@" ;;
     wait_for) chrome_wait_for "$@" ;;
