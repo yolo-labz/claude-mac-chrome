@@ -74,7 +74,7 @@ tar xzf src.tar.gz
 cd "happy-dom-$commit/packages/happy-dom"
 
 echo "Building deterministic bundle..."
-npm install --silent
+npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts --silent
 SOURCE_DATE_EPOCH=1700000000 \
   ./node_modules/.bin/esbuild --bundle src/index.ts \
   --format=esm \
