@@ -549,7 +549,15 @@ APPLESCRIPT
 # ---------------------------------------------------------------------------
 chrome_js() {
   local win="$1" tab="$2" js="$3"
-  osascript -e "tell application \"Google Chrome\" to execute (tab id \"$tab\" of window id \"$win\") javascript \"$js\""
+  # Escape JS for AppleScript. AppleScript string literals use JSON-compatible
+  # backslash escapes (\", \\, \n, \t). jq -Rs . produces exactly that format.
+  local js_quoted
+  js_quoted=$(printf '%s' "$js" | jq -Rs . 2> /dev/null)
+  [[ -z "$js_quoted" ]] && {
+    _chrome_err "chrome_js: failed to JSON-escape JS (jq required)"
+    return 1
+  }
+  osascript -e "tell application \"Google Chrome\" to execute (tab id \"$tab\" of window id \"$win\") javascript $js_quoted"
 }
 
 # ---------------------------------------------------------------------------
@@ -557,7 +565,12 @@ chrome_js() {
 # ---------------------------------------------------------------------------
 chrome_navigate() {
   local win="$1" tab="$2" url="$3"
-  osascript -e "tell application \"Google Chrome\" to set URL of (tab id \"$tab\" of window id \"$win\") to \"$url\""
+  local url_quoted
+  url_quoted=$(printf '%s' "$url" | jq -Rs . 2> /dev/null) || {
+    _chrome_err "chrome_navigate: failed to escape URL (jq required)"
+    return 1
+  }
+  osascript -e "tell application \"Google Chrome\" to set URL of (tab id \"$tab\" of window id \"$win\") to $url_quoted"
 }
 
 # ---------------------------------------------------------------------------
@@ -565,12 +578,12 @@ chrome_navigate() {
 # ---------------------------------------------------------------------------
 chrome_new_tab() {
   local win="$1" url="$2"
-  osascript << APPLESCRIPT
-tell application "Google Chrome"
-  set newTab to make new tab at end of tabs of window id "$win" with properties {URL:"$url"}
-  return id of newTab
-end tell
-APPLESCRIPT
+  local url_quoted
+  url_quoted=$(printf '%s' "$url" | jq -Rs . 2> /dev/null) || {
+    _chrome_err "chrome_new_tab: failed to escape URL (jq required)"
+    return 1
+  }
+  osascript -e "tell application \"Google Chrome\" to return id of (make new tab at end of tabs of window id \"$win\" with properties {URL:$url_quoted})"
 }
 
 # ---------------------------------------------------------------------------
