@@ -1,0 +1,15 @@
+<!--
+  target_rail: purchase_button_text_depth_0 (after _foldConfusables Greek fold)
+  isolation_proof: Button text uses Greek small letter omicron (U+03BF) and
+    rho (U+03C1) in "sub\u03C3cribe" no — "upgr\u03B1de" with Greek alpha.
+    NFKC does NOT fold Greek to Latin; script confusables fold must.
+  last_reviewed: 2026-04-22
+-->
+<!doctype html>
+<html>
+  <head><title>Test 15 — Greek upgrade</title></head>
+  <body>
+    <h1>Plan</h1>
+    <button id="target">Upgrαde</button>
+  </body>
+</html>

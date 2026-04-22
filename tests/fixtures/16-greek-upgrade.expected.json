@@ -5,11 +5,11 @@
   "evidence": {
     "match_depth": 0,
     "match_host": "self",
-    "match_text": "Uрgrade",
+    "match_text": "Upgrαde",
     "confusables_normalized": true
   },
   "fired_rail_trace": ["element_lookup", "ancestor_text_walk"],
   "selector": "#target",
   "variant_group": "purchase_button_text",
-  "note": "Cyrillic 'р' (U+0440) is folded to Latin 'p' by _foldConfusables (NFKD + combining-mark strip + script fold). Caught at depth 0 (the button itself). Pre-fold v1.0.0 caught at depth 2 via body-level aggregation."
+  "note": "Greek small letter alpha (U+03B1) folds to Latin 'a'. Caught at depth 0."
 }
