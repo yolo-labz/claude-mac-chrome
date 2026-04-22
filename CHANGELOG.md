@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Full TR39 script-confusables fold** in `_chrome_safety_check_js` — `_foldConfusables(s)` helper (NFKD → combining-mark strip → Cyrillic/Greek/Armenian + Latin-lookalike map of 79 codepoints) replaces the previous NFKC-only normalization at three call sites (target text, ancestor walk, attribute value). Closes the NFKC blind spot where distinct-script codepoints (`U+0430` Cyrillic а, `U+03B1` Greek α, etc.) render identically to Latin but never decompose. Fixture 02 (Cyrillic "Uрgrade") now catches at `match_depth: 0` (was depth 2 via body aggregation); new fixture 16 covers Greek alpha. `tests/fuzz/unicode-confusables.mjs` now loads the real fold map from the emitted safety JS and exits nonzero on any miss (72/72 confusable variants caught).
+
 ## [1.1.1] — 2026-04-12 — SBOM fix
 
 ### Fixed

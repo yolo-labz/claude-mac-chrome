@@ -1465,6 +1465,42 @@ _chrome_safety_check_js() {
     };
     const _fire = function(rail) { result.fired_rail_trace.push(rail); };
 
+    // NFR-SR-V2-2: script-confusables fold (Cyrillic / Greek / Armenian Latin-lookalikes)
+    // plus zero-width + BiDi override + combining-mark strip. Covers NFKC blind spot
+    // where distinct-script codepoints (Cyrillic \\u0430 "a", Greek \\u03BF "o", etc.)
+    // render visually identical to Latin but never decompose via NFKC.
+    const _CONFUSABLES_FOLD = {
+      "\\u0430":"a","\\u0435":"e","\\u043E":"o","\\u0440":"p","\\u0441":"c","\\u0443":"y","\\u0445":"x",
+      "\\u0456":"i","\\u0458":"j","\\u0455":"s","\\u0501":"d","\\u051B":"q","\\u051D":"w","\\u0451":"e",
+      "\\u049B":"k","\\u04CF":"i","\\u0433":"r","\\u0434":"d","\\u0432":"b","\\u043A":"k","\\u043C":"m",
+      "\\u043D":"h","\\u0442":"t","\\u0454":"e",
+      "\\u0131":"i","\\u0261":"g",
+      "\\u0410":"a","\\u0412":"b","\\u0415":"e","\\u041A":"k","\\u041C":"m","\\u041D":"h","\\u041E":"o",
+      "\\u0420":"p","\\u0421":"c","\\u0422":"t","\\u0425":"x","\\u0423":"y","\\u0405":"s","\\u0406":"i",
+      "\\u0408":"j","\\u04AE":"y","\\u04C0":"i",
+      "\\u03B1":"a","\\u03BF":"o","\\u03C1":"p","\\u03BD":"v","\\u03B9":"i","\\u03BA":"k","\\u03B7":"n",
+      "\\u03B5":"e","\\u03C7":"x","\\u03C5":"u","\\u03BC":"u","\\u03C4":"t",
+      "\\u0391":"a","\\u0392":"b","\\u0395":"e","\\u0396":"z","\\u0397":"h","\\u0399":"i","\\u039A":"k",
+      "\\u039C":"m","\\u039D":"n","\\u039F":"o","\\u03A1":"p","\\u03A4":"t","\\u03A5":"y","\\u03A7":"x",
+      "\\u0561":"a","\\u0578":"n","\\u057D":"u","\\u057C":"n","\\u0585":"o","\\u0581":"g","\\u0566":"q",
+      "\\u0570":"h","\\u0574":"u","\\u057A":"u"
+    };
+    function _foldConfusables(s) {
+      if (!s) return "";
+      // NFKD decomposes precomposed chars (café → cafe+́) so we can strip the
+      // combining marks. NFKC would re-compose and defeat the strip.
+      try { s = s.normalize("NFKD"); } catch (_) {}
+      // Strip combining marks, zero-width, BiDi overrides, BOM, invisible separators
+      s = s.replace(/[\\u0300-\\u036F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\uFEFF]/g, "");
+      let out = "";
+      for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (c.charCodeAt(0) < 0x80) { out += c; continue; }
+        out += _CONFUSABLES_FOLD[c] || c;
+      }
+      return out;
+    }
+
     _fire("element_lookup");
     const el = _QS(sel);
     if (!el) {
@@ -1500,9 +1536,9 @@ _chrome_safety_check_js() {
     }
 
     const raw_text = gatherAllText(el, 0);
-    // NFR-SR-V2-2: NFKC + zero-width stripping (full TR39 confusables deferred)
-    const norm_text = raw_text.normalize("NFKC")
-      .replace(/[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]/g, "");
+    // NFR-SR-V2-2: full script-confusables fold (_foldConfusables handles NFKC,
+    // zero-width / BiDi / combining strip, and Cyrillic/Greek/Armenian fold).
+    const norm_text = _foldConfusables(raw_text);
     result.element_text = norm_text.slice(0, 200);
 
     // 3-ancestor walk checking text + exhaustive attribute list (NFR-SR-V2-10)
@@ -1514,9 +1550,7 @@ _chrome_safety_check_js() {
     _fire("ancestor_text_walk");
     for (let depth = 0; depth < 3 && node; depth++) {
       // Text check using full gatherAllText (includes shadow DOM + ::before/::after)
-      const node_text = gatherAllText(node, 0)
-        .normalize("NFKC")
-        .replace(/[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]/g, "");
+      const node_text = _foldConfusables(gatherAllText(node, 0));
       if (lex_re.test(node_text)) {
         result.blocked_reason = "purchase_button_text_depth_" + depth;
         return JSON.stringify(result);
@@ -1525,7 +1559,7 @@ _chrome_safety_check_js() {
       if (node.getAttribute) {
         for (const attr of attrs_to_check) {
           const val = node.getAttribute(attr) || "";
-          if (val && lex_re.test(val.normalize("NFKC"))) {
+          if (val && lex_re.test(_foldConfusables(val))) {
             result.blocked_reason = "purchase_button_attr_" + attr + "_depth_" + depth;
             return JSON.stringify(result);
           }
