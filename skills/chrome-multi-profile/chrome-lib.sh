@@ -1677,6 +1677,35 @@ _chrome_safety_check_js() {
       return JSON.stringify(result);
     }
 
+    // TOCTOU fingerprint (NFR-SR-V2-TOCTOU): lock the element's outerHTML hash
+    // and bounding-rect snapshot so the dispatch step can detect DOM mutation
+    // between safety-pass and click. FNV-1a 32-bit — integrity signal, not
+    // cryptographic. outerHTML truncated to 5000 chars to bound the hash input.
+    function _fnv1a(s) {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+      }
+      return h.toString(16);
+    }
+    try {
+      const _fp_rect = el.getBoundingClientRect();
+      result.element_fingerprint = {
+        tag: el.tagName || "",
+        id: el.id || "",
+        outerHTML_hash: _fnv1a((el.outerHTML || "").slice(0, 5000)),
+        rect: {
+          x: Math.round(_fp_rect.left),
+          y: Math.round(_fp_rect.top),
+          w: Math.round(_fp_rect.width),
+          h: Math.round(_fp_rect.height)
+        }
+      };
+    } catch (_) {
+      result.element_fingerprint = null;
+    }
+
     // All checks passed — action is allowed
     result.ok = true;
     return JSON.stringify(result);
@@ -1828,8 +1857,11 @@ chrome_click() {
   # `element.click()` alone is insufficient for React 18+/Vue 3 components
   # that listen on pointerdown. Full sequence: pointerdown → mousedown →
   # pointerup → mouseup → click, with coordinates from getBoundingClientRect
-  # center. Includes element.isConnected verification (NFR-SR-V2-6) and
-  # elementFromPoint hit-test (NFR-JS-V2-5) as a partial visibility guard.
+  # center. Includes element.isConnected verification (NFR-SR-V2-6),
+  # elementFromPoint hit-test (NFR-JS-V2-5), and TOCTOU fingerprint compare
+  # against the safety-check envelope (NFR-SR-V2-TOCTOU).
+  local expected_fp
+  expected_fp=$(printf '%s' "$check_result" | jq -c '.element_fingerprint // null' 2> /dev/null || printf 'null')
   local click_js
   click_js=$(
     cat << JSEOF
@@ -1838,6 +1870,15 @@ chrome_click() {
     const _QS = document.querySelector.bind(document);
     const _GCS = window.getComputedStyle.bind(window);
     const _EFP = document.elementFromPoint.bind(document);
+    const _EXPECTED_FP = ${expected_fp};
+    function _fnv1a(s) {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+      }
+      return h.toString(16);
+    }
     const el = _QS(${sel_json});
     if (!el) return JSON.stringify({ok:false,error:"element_vanished"});
     if (!el.isConnected) return JSON.stringify({ok:false,error:"element_detached"});
@@ -1846,6 +1887,29 @@ chrome_click() {
     }
     el.scrollIntoView({block:"center", inline:"center", behavior:"instant"});
     const rect = el.getBoundingClientRect();
+    // TOCTOU drift check: recompute fingerprint, compare against safety snapshot.
+    // Tag/id/outerHTML_hash are exact-match; rect allows 4px jitter for layout reflow.
+    if (_EXPECTED_FP) {
+      const _cur_fp = {
+        tag: el.tagName || "",
+        id: el.id || "",
+        outerHTML_hash: _fnv1a((el.outerHTML || "").slice(0, 5000)),
+        rect: {x: Math.round(rect.left), y: Math.round(rect.top),
+               w: Math.round(rect.width), h: Math.round(rect.height)}
+      };
+      const drift = [];
+      if (_cur_fp.tag !== _EXPECTED_FP.tag) drift.push("tag");
+      if (_cur_fp.id !== _EXPECTED_FP.id) drift.push("id");
+      if (_cur_fp.outerHTML_hash !== _EXPECTED_FP.outerHTML_hash) drift.push("outerHTML_hash");
+      const er = _EXPECTED_FP.rect || {x:0,y:0,w:0,h:0};
+      if (Math.abs(_cur_fp.rect.x - er.x) > 4 || Math.abs(_cur_fp.rect.y - er.y) > 4 ||
+          Math.abs(_cur_fp.rect.w - er.w) > 4 || Math.abs(_cur_fp.rect.h - er.h) > 4) {
+        drift.push("rect");
+      }
+      if (drift.length > 0) {
+        return JSON.stringify({ok:false, error:"toctou_drift", drift:drift});
+      }
+    }
     if (rect.width < 1 || rect.height < 1) {
       return JSON.stringify({ok:false,error:"zero_dimensions"});
     }
@@ -1889,6 +1953,15 @@ JSEOF
       "$(_chrome_json_stringify_sh "$selector")" \
       "$(_chrome_json_stringify_sh "$current_url")"
     return 0
+  elif [[ "$click_result" == *'"error":"toctou_drift"'* ]]; then
+    local drift_fields
+    drift_fields=$(printf '%s' "$click_result" | jq -c '.drift // []' 2> /dev/null || printf '[]')
+    _chrome_audit_append "click" "blocked" "$current_url" "$selector" "" "toctou_drift" "post_execute" 2> /dev/null || true
+    printf '{"ok":false,"error":"SAFETY_BLOCK","reason":"toctou_drift","drift":%s,"selector":%s,"url":%s}\n' \
+      "$drift_fields" \
+      "$(_chrome_json_stringify_sh "$selector")" \
+      "$(_chrome_json_stringify_sh "$current_url")"
+    return 1
   else
     _chrome_audit_append "click" "dispatch_failed" "$current_url" "$selector" "" "" "post_execute" 2> /dev/null || true
     printf '{"ok":false,"error":"CLICK_DISPATCH_FAILED","selector":%s,"url":%s}\n' \
