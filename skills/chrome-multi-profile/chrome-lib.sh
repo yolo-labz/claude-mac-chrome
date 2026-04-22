@@ -1105,9 +1105,84 @@ _chrome_audit_ensure_dir() {
   (umask 077 && mkdir -p "$dir") || return 1
 }
 
+# --- Rotation + append-only enforcement (NFR-SR-V2-16, NFR-SR-V2-AUDIT-ROT) ---
+# Threshold: 10 MiB default, overridable via CHROME_AUDIT_ROTATE_BYTES for tests.
+# Lock: mkdir-based mutex (atomic on POSIX, works without flock(1) on macOS).
+# Append-only: chflags uappnd on Darwin (overridable via CHROME_AUDIT_APPEND_ONLY=0).
+
+_chrome_audit_rotate_threshold() {
+  printf '%d' "${CHROME_AUDIT_ROTATE_BYTES:-10485760}"
+}
+
+_chrome_audit_size() {
+  local path="$1"
+  [[ -f "$path" ]] || { printf '%d' 0; return; }
+  wc -c < "$path" 2> /dev/null | tr -d ' '
+}
+
+_chrome_audit_lock_dir() {
+  printf '%s' "${HOME}/.local/state/claude-mac-chrome/.rotate.lock"
+}
+
+_chrome_audit_lock() {
+  local dir
+  dir=$(_chrome_audit_lock_dir)
+  local i=0
+  while ! mkdir "$dir" 2> /dev/null; do
+    i=$((i + 1))
+    [[ $i -gt 50 ]] && return 1
+    sleep 0.1
+  done
+  return 0
+}
+
+_chrome_audit_unlock() {
+  rmdir "$(_chrome_audit_lock_dir)" 2> /dev/null || true
+}
+
+_chrome_audit_set_append_only() {
+  [[ "${CHROME_AUDIT_APPEND_ONLY:-1}" == "1" ]] || return 0
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  chflags uappnd "$1" 2> /dev/null || true
+}
+
+_chrome_audit_clear_append_only() {
+  [[ "${CHROME_AUDIT_APPEND_ONLY:-1}" == "1" ]] || return 0
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  chflags nouappnd "$1" 2> /dev/null || true
+}
+
+_chrome_audit_rotate_if_needed() {
+  local log_path="$1"
+  [[ -f "$log_path" ]] || return 0
+  local size threshold
+  size=$(_chrome_audit_size "$log_path")
+  threshold=$(_chrome_audit_rotate_threshold)
+  [[ "$size" -ge "$threshold" ]] || return 0
+
+  # Contention → skip; next writer will retry. Never block the audit path.
+  _chrome_audit_lock || return 0
+
+  # Double-check under lock: a peer writer may have rotated already.
+  size=$(_chrome_audit_size "$log_path")
+  if [[ "$size" -ge "$threshold" ]]; then
+    local rotated="${log_path}.1"
+    _chrome_audit_clear_append_only "$log_path"
+    if [[ -f "$rotated" ]]; then
+      _chrome_audit_clear_append_only "$rotated"
+      rm -f "$rotated" 2> /dev/null
+    fi
+    mv -f "$log_path" "$rotated" 2> /dev/null
+    (umask 077 && : > "$log_path")
+    _chrome_audit_set_append_only "$rotated"
+    _chrome_audit_set_append_only "$log_path"
+  fi
+  _chrome_audit_unlock
+}
+
 # Append one JSONL entry to the audit log. Per NFR-SR-V2-14 (JSON-encoded
-# control char sanitization via jq --arg). chflags append-only enforcement
-# (NFR-SR-V2-16) deferred to v0.8.1.
+# control char sanitization via jq --arg) + NFR-SR-V2-16 (chflags append-only)
+# + NFR-SR-V2-AUDIT-ROT (size-triggered single-slot rotation under mkdir lock).
 _chrome_audit_append() {
   # Args: action outcome url selector element_text reason phase
   local action="$1" outcome="$2" url="$3" selector="$4"
@@ -1117,10 +1192,13 @@ _chrome_audit_append() {
   local log_path
   log_path=$(_chrome_audit_log_path)
 
-  # Create with 0600 on first write
+  # Create with 0600 on first write, then mark append-only.
   if [[ ! -f "$log_path" ]]; then
     (umask 077 && : > "$log_path")
+    _chrome_audit_set_append_only "$log_path"
   fi
+
+  _chrome_audit_rotate_if_needed "$log_path"
 
   local timestamp
   timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)

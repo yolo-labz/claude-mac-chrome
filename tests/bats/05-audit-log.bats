@@ -6,6 +6,7 @@ setup() {
   REPO_ROOT="$(cd -- "$(dirname -- "$BATS_TEST_FILENAME")/../.." && pwd)"
   LIB="$REPO_ROOT/skills/chrome-multi-profile/chrome-lib.sh"
   export HOME="$BATS_TEST_TMPDIR/fake-home"
+  export CHROME_AUDIT_APPEND_ONLY=0
   mkdir -p "$HOME"
   # shellcheck disable=SC1090
   source "$LIB"
@@ -13,6 +14,7 @@ setup() {
 }
 
 teardown() {
+  [[ "$(uname -s)" == "Darwin" ]] && chflags -R nouappnd "$HOME" 2> /dev/null || true
   rm -rf "$HOME"
 }
 
