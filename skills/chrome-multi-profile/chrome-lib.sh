@@ -595,6 +595,106 @@ chrome_tab_url() {
 }
 
 # ---------------------------------------------------------------------------
+# chrome_tab_title <window_id> <tab_id> — read tab title (for title-sentinel pattern)
+# ---------------------------------------------------------------------------
+chrome_tab_title() {
+  local win="$1" tab="$2"
+  osascript -e "tell application \"Google Chrome\" to return title of (tab id \"$tab\" of window id \"$win\")" 2> /dev/null
+}
+
+# ---------------------------------------------------------------------------
+# _chrome_js_async_wrapper <sentinel_json> <user_js>
+# Builds the title-sentinel wrapper JS. Extracted so bats can test it directly
+# without needing Chrome. The wrapper stashes the original title in
+# window["__cmc_orig_<sentinel>"] so the caller can restore it after reading.
+# ---------------------------------------------------------------------------
+_chrome_js_async_wrapper() {
+  local sentinel_json="$1" user_js="$2"
+  cat << JSEOF
+(function(){
+  var __cmc_sentinel = ${sentinel_json};
+  try { window["__cmc_orig_" + __cmc_sentinel] = document.title; } catch(_) {}
+  function __cmc_emit(obj){
+    try { document.title = __cmc_sentinel + ":" + JSON.stringify(obj); }
+    catch(_) { document.title = __cmc_sentinel + ":" + JSON.stringify({ok:false,error:"payload_stringify_failed"}); }
+  }
+  try {
+    Promise.resolve().then(function(){
+      return (function(){ ${user_js} })();
+    }).then(function(r){
+      __cmc_emit({ok:true, value:r === undefined ? null : r});
+    }).catch(function(e){
+      __cmc_emit({ok:false, error: String(e && e.message ? e.message : e)});
+    });
+  } catch (sync_err) {
+    __cmc_emit({ok:false, error: "sync_throw:" + String(sync_err)});
+  }
+})();
+JSEOF
+}
+
+# ---------------------------------------------------------------------------
+# chrome_js_async <window_id> <tab_id> <js_returning_promise> [timeout_s]
+# Runs async JS, polling document.title for a per-call sentinel marker.
+# The user JS runs inside a function body; its return value (or Promise) is
+# awaited and JSON-stringified into the title. Caller receives the parsed
+# payload on stdout as {ok, value} or {ok:false, error}. Default timeout: 10s.
+# ---------------------------------------------------------------------------
+chrome_js_async() {
+  local win="$1" tab="$2" js="$3" timeout_s="${4:-10}"
+
+  if [[ -z "$win" || -z "$tab" || -z "$js" ]]; then
+    printf '{"ok":false,"error":"INVALID_ARGS","reason":"usage: chrome_js_async <win> <tab> <js> [timeout_s]"}\n'
+    return 2
+  fi
+  if [[ ! "$timeout_s" =~ ^[0-9]+$ ]] || [[ "$timeout_s" -lt 1 ]] || [[ "$timeout_s" -gt 600 ]]; then
+    printf '{"ok":false,"error":"INVALID_ARGS","reason":"timeout_s must be integer 1..600"}\n'
+    return 2
+  fi
+
+  # Sentinel: unique per call. openssl if available, else PID+nanos fallback.
+  local sentinel
+  if command -v openssl > /dev/null 2>&1; then
+    sentinel="__cmc_$(openssl rand -hex 8 2> /dev/null)"
+  else
+    sentinel="__cmc_$$_$(date +%s)_${RANDOM}${RANDOM}"
+  fi
+
+  local sentinel_json
+  sentinel_json=$(_chrome_json_stringify_sh "$sentinel")
+
+  local wrapper wrapper_oneline
+  wrapper=$(_chrome_js_async_wrapper "$sentinel_json" "$js")
+  wrapper_oneline=$(printf '%s' "$wrapper" | tr '\n' ' ')
+
+  # Fire wrapper; we don't await the AppleScript return (Promise is running in the tab).
+  chrome_js "$win" "$tab" "$wrapper_oneline" > /dev/null 2> /dev/null || true
+
+  # Poll title at ~100ms cadence until sentinel-prefixed title appears.
+  local deadline title payload
+  deadline=$(($(date +%s) + timeout_s))
+  while [[ $(date +%s) -lt $deadline ]]; do
+    title=$(chrome_tab_title "$win" "$tab" || printf '')
+    if [[ "$title" == "$sentinel":* ]]; then
+      payload="${title#"$sentinel":}"
+      # Restore title + clean up window var, best-effort.
+      local cleanup="try { document.title = window['__cmc_orig_' + ${sentinel_json}] || ''; delete window['__cmc_orig_' + ${sentinel_json}]; } catch(_) {}"
+      chrome_js "$win" "$tab" "$cleanup" > /dev/null 2> /dev/null || true
+      printf '%s\n' "$payload"
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  # Timeout: one more cleanup attempt in case the promise resolves later.
+  local cleanup="try { if (document.title.indexOf(${sentinel_json}) === 0) { document.title = window['__cmc_orig_' + ${sentinel_json}] || ''; } delete window['__cmc_orig_' + ${sentinel_json}]; } catch(_) {}"
+  chrome_js "$win" "$tab" "$cleanup" > /dev/null 2> /dev/null || true
+  printf '{"ok":false,"error":"chrome_js_async_timeout","timeout_s":%d,"sentinel":%s}\n' \
+    "$timeout_s" "$sentinel_json"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Human-readable diagnostic with match method + confidence
 # ---------------------------------------------------------------------------
 chrome_debug() {
@@ -2176,9 +2276,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     window_for) chrome_window_for "$@" ;;
     tab_for_url) chrome_tab_for_url "$@" ;;
     js) chrome_js "$@" ;;
+    js_async) chrome_js_async "$@" ;;
     navigate) chrome_navigate "$@" ;;
     new_tab) chrome_new_tab "$@" ;;
     tab_url) chrome_tab_url "$@" ;;
+    tab_title) chrome_tab_title "$@" ;;
     debug) chrome_debug ;;
     profile_urls)
       _chrome_err "profile_urls was removed in v0.4.0 (SNSS parser eliminated)"
@@ -2192,6 +2294,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     click) chrome_click "$@" ;;
     query) chrome_query "$@" ;;
     wait_for) chrome_wait_for "$@" ;;
+    _emit_js_async_wrapper)
+      # Hidden CLI verb for test harness (PR #23).
+      # Usage: chrome-lib.sh _emit_js_async_wrapper <sentinel> <user_js>
+      _wrap_sentinel_json=$(_chrome_json_stringify_sh "${1:-test_sentinel}")
+      _chrome_js_async_wrapper "$_wrap_sentinel_json" "${2:-return 42;}"
+      unset _wrap_sentinel_json
+      ;;
     _emit_safety_js)
       # Hidden CLI verb for test harness (feature 006 T006).
       # Usage: chrome-lib.sh _emit_safety_js <selector>
