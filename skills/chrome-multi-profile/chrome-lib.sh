@@ -1216,7 +1216,10 @@ _chrome_audit_rotate_threshold() {
 
 _chrome_audit_size() {
   local path="$1"
-  [[ -f "$path" ]] || { printf '%d' 0; return; }
+  [[ -f "$path" ]] || {
+    printf '%d' 0
+    return
+  }
   wc -c < "$path" 2> /dev/null | tr -d ' '
 }
 
