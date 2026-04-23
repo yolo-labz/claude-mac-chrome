@@ -359,3 +359,11 @@ Prior art:
 - **[Hammerspoon ChromeProfileSwitcher.spoon](https://github.com/Hammerspoon/Spoons)** — Lua automation library that inspired the Local State parsing approach
 
 The insight that Chrome's own `Local State` file can serve as an authoritative profile catalog, combined with extracting signed-in emails from Google/webmail tab titles, is the core of this plugin. Both techniques are documented in Chromium source and work reliably across Chrome versions.
+
+## See also (yolo-labz ecosystem)
+
+- [yolo-labz/linkedin-chrome-copilot](https://github.com/yolo-labz/linkedin-chrome-copilot) — LinkedIn copilot that delegates 100% of Chrome I/O to this plugin via `tools/chrome-shim.sh`. Reference downstream consumer.
+- [yolo-labz/wa](https://github.com/yolo-labz/wa) — WhatsApp daemon that composes for cross-app pipelines (browser → messaging → save-state).
+- [yolo-labz/kokoro-speakd](https://github.com/yolo-labz/kokoro-speakd) — TTS daemon for spoken status feedback during long browser-automation runs.
+- Architecture deep-dives on multi-profile detection + cliclick + isTrusted bypass: [blog.home301server.com.br](https://blog.home301server.com.br).
+- Author portfolio: [portfolio.home301server.com.br](https://portfolio.home301server.com.br).
