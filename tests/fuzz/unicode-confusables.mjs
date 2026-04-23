@@ -2,14 +2,11 @@
 // Feature 006 T058 — Unicode confusables fuzzer.
 // Per spec §NFR-V2-FX-9 + NFR-SR-V2-2.
 //
-// Exercises the NFKC normalization + zero-width strip rails by
-// generating every Unicode confusable spelling of "upgrade",
-// "subscribe", "comprar", "pagar", and asserting the safety check
-// catches all of them via the ancestor_text_walk rail.
-//
-// Confusables database: UTS #39 subset hard-coded below. For full
-// coverage we'd import unicode-confusables@2.x, but v1.0.0 MVP uses
-// a curated subset of the most dangerous swaps.
+// PR #20 upgrade: exercises the FULL _foldConfusables pipeline
+// (NFKD + combining-mark strip + script-confusables map) embedded
+// in _chrome_safety_check_js. Every single-character UTS #39 swap
+// for "upgrade", "subscribe", "comprar", "pagar", "checkout" must
+// fold back to the target — exits nonzero on any miss.
 
 // Most abused Latin-to-Cyrillic/Greek confusables
 const CONFUSABLES = {
@@ -46,11 +43,36 @@ function* generateConfusables(word) {
   }
 }
 
-// Simulate the safety check's normalization pipeline
+// Load the REAL fold map from chrome-lib.sh's emitted safety JS so
+// the fuzzer and production rail share ground truth.
+import { spawnSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const LIB = resolve(__dirname, "..", "..", "skills", "chrome-multi-profile", "chrome-lib.sh");
+const emit = spawnSync("bash", [LIB, "_emit_safety_js", ".fuzz"], { encoding: "utf8" });
+if (emit.status !== 0) {
+  console.error("failed to emit safety JS:", emit.stderr);
+  process.exit(2);
+}
+const mapMatch = emit.stdout.match(/_CONFUSABLES_FOLD\s*=\s*(\{[\s\S]+?\});/);
+if (!mapMatch) {
+  console.error("fold map not found in emitted safety JS");
+  process.exit(3);
+}
+const FOLD_MAP = JSON.parse(mapMatch[1]);
+
 function normalize(text) {
-  return text
-    .normalize("NFKC")
-    .replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, "");
+  if (!text) return "";
+  let s = text.normalize("NFKD");
+  s = s.replace(/[\u0300-\u036F\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, "");
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c.charCodeAt(0) < 0x80) { out += c; continue; }
+    out += FOLD_MAP[c] || c;
+  }
+  return out;
 }
 
 let tested = 0;
@@ -74,16 +96,13 @@ for (const word of TARGET_WORDS) {
 
 console.log(`tested=${tested} caught=${caught} missed=${missed}`);
 if (missed > 0) {
-  console.log("\nSample misses (upgrade to full UTS #39 confusables fold to catch):");
+  console.log("\nMisses (fold map is missing these codepoints — add to _CONFUSABLES_FOLD):");
   for (const m of misses) {
     console.log(
       `  ${m.word}: variant=${JSON.stringify(m.variant)} normalized=${JSON.stringify(m.norm)}`,
     );
   }
-  // NFKC alone does NOT fold Cyrillic -> Latin; full UTS #39 is needed.
-  // v0.8.0 ships with NFKC only. v0.8.1 will upgrade to full fold.
-  // Exit 0 for v1.0.0 (known gap, tracked) but print report.
-  process.exit(0);
+  process.exit(1);
 }
 
 console.log("PASS: all confusable variants normalized to target word");

@@ -595,6 +595,106 @@ chrome_tab_url() {
 }
 
 # ---------------------------------------------------------------------------
+# chrome_tab_title <window_id> <tab_id> — read tab title (for title-sentinel pattern)
+# ---------------------------------------------------------------------------
+chrome_tab_title() {
+  local win="$1" tab="$2"
+  osascript -e "tell application \"Google Chrome\" to return title of (tab id \"$tab\" of window id \"$win\")" 2> /dev/null
+}
+
+# ---------------------------------------------------------------------------
+# _chrome_js_async_wrapper <sentinel_json> <user_js>
+# Builds the title-sentinel wrapper JS. Extracted so bats can test it directly
+# without needing Chrome. The wrapper stashes the original title in
+# window["__cmc_orig_<sentinel>"] so the caller can restore it after reading.
+# ---------------------------------------------------------------------------
+_chrome_js_async_wrapper() {
+  local sentinel_json="$1" user_js="$2"
+  cat << JSEOF
+(function(){
+  var __cmc_sentinel = ${sentinel_json};
+  try { window["__cmc_orig_" + __cmc_sentinel] = document.title; } catch(_) {}
+  function __cmc_emit(obj){
+    try { document.title = __cmc_sentinel + ":" + JSON.stringify(obj); }
+    catch(_) { document.title = __cmc_sentinel + ":" + JSON.stringify({ok:false,error:"payload_stringify_failed"}); }
+  }
+  try {
+    Promise.resolve().then(function(){
+      return (function(){ ${user_js} })();
+    }).then(function(r){
+      __cmc_emit({ok:true, value:r === undefined ? null : r});
+    }).catch(function(e){
+      __cmc_emit({ok:false, error: String(e && e.message ? e.message : e)});
+    });
+  } catch (sync_err) {
+    __cmc_emit({ok:false, error: "sync_throw:" + String(sync_err)});
+  }
+})();
+JSEOF
+}
+
+# ---------------------------------------------------------------------------
+# chrome_js_async <window_id> <tab_id> <js_returning_promise> [timeout_s]
+# Runs async JS, polling document.title for a per-call sentinel marker.
+# The user JS runs inside a function body; its return value (or Promise) is
+# awaited and JSON-stringified into the title. Caller receives the parsed
+# payload on stdout as {ok, value} or {ok:false, error}. Default timeout: 10s.
+# ---------------------------------------------------------------------------
+chrome_js_async() {
+  local win="$1" tab="$2" js="$3" timeout_s="${4:-10}"
+
+  if [[ -z "$win" || -z "$tab" || -z "$js" ]]; then
+    printf '{"ok":false,"error":"INVALID_ARGS","reason":"usage: chrome_js_async <win> <tab> <js> [timeout_s]"}\n'
+    return 2
+  fi
+  if [[ ! "$timeout_s" =~ ^[0-9]+$ ]] || [[ "$timeout_s" -lt 1 ]] || [[ "$timeout_s" -gt 600 ]]; then
+    printf '{"ok":false,"error":"INVALID_ARGS","reason":"timeout_s must be integer 1..600"}\n'
+    return 2
+  fi
+
+  # Sentinel: unique per call. openssl if available, else PID+nanos fallback.
+  local sentinel
+  if command -v openssl > /dev/null 2>&1; then
+    sentinel="__cmc_$(openssl rand -hex 8 2> /dev/null)"
+  else
+    sentinel="__cmc_$$_$(date +%s)_${RANDOM}${RANDOM}"
+  fi
+
+  local sentinel_json
+  sentinel_json=$(_chrome_json_stringify_sh "$sentinel")
+
+  local wrapper wrapper_oneline
+  wrapper=$(_chrome_js_async_wrapper "$sentinel_json" "$js")
+  wrapper_oneline=$(printf '%s' "$wrapper" | tr '\n' ' ')
+
+  # Fire wrapper; we don't await the AppleScript return (Promise is running in the tab).
+  chrome_js "$win" "$tab" "$wrapper_oneline" > /dev/null 2> /dev/null || true
+
+  # Poll title at ~100ms cadence until sentinel-prefixed title appears.
+  local deadline title payload
+  deadline=$(($(date +%s) + timeout_s))
+  while [[ $(date +%s) -lt $deadline ]]; do
+    title=$(chrome_tab_title "$win" "$tab" || printf '')
+    if [[ "$title" == "$sentinel":* ]]; then
+      payload="${title#"$sentinel":}"
+      # Restore title + clean up window var, best-effort.
+      local cleanup="try { document.title = window['__cmc_orig_' + ${sentinel_json}] || ''; delete window['__cmc_orig_' + ${sentinel_json}]; } catch(_) {}"
+      chrome_js "$win" "$tab" "$cleanup" > /dev/null 2> /dev/null || true
+      printf '%s\n' "$payload"
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  # Timeout: one more cleanup attempt in case the promise resolves later.
+  local cleanup="try { if (document.title.indexOf(${sentinel_json}) === 0) { document.title = window['__cmc_orig_' + ${sentinel_json}] || ''; } delete window['__cmc_orig_' + ${sentinel_json}]; } catch(_) {}"
+  chrome_js "$win" "$tab" "$cleanup" > /dev/null 2> /dev/null || true
+  printf '{"ok":false,"error":"chrome_js_async_timeout","timeout_s":%d,"sentinel":%s}\n' \
+    "$timeout_s" "$sentinel_json"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Human-readable diagnostic with match method + confidence
 # ---------------------------------------------------------------------------
 chrome_debug() {
@@ -1105,9 +1205,87 @@ _chrome_audit_ensure_dir() {
   (umask 077 && mkdir -p "$dir") || return 1
 }
 
+# --- Rotation + append-only enforcement (NFR-SR-V2-16, NFR-SR-V2-AUDIT-ROT) ---
+# Threshold: 10 MiB default, overridable via CHROME_AUDIT_ROTATE_BYTES for tests.
+# Lock: mkdir-based mutex (atomic on POSIX, works without flock(1) on macOS).
+# Append-only: chflags uappnd on Darwin (overridable via CHROME_AUDIT_APPEND_ONLY=0).
+
+_chrome_audit_rotate_threshold() {
+  printf '%d' "${CHROME_AUDIT_ROTATE_BYTES:-10485760}"
+}
+
+_chrome_audit_size() {
+  local path="$1"
+  [[ -f "$path" ]] || {
+    printf '%d' 0
+    return
+  }
+  wc -c < "$path" 2> /dev/null | tr -d ' '
+}
+
+_chrome_audit_lock_dir() {
+  printf '%s' "${HOME}/.local/state/claude-mac-chrome/.rotate.lock"
+}
+
+_chrome_audit_lock() {
+  local dir
+  dir=$(_chrome_audit_lock_dir)
+  local i=0
+  while ! mkdir "$dir" 2> /dev/null; do
+    i=$((i + 1))
+    [[ $i -gt 50 ]] && return 1
+    sleep 0.1
+  done
+  return 0
+}
+
+_chrome_audit_unlock() {
+  rmdir "$(_chrome_audit_lock_dir)" 2> /dev/null || true
+}
+
+_chrome_audit_set_append_only() {
+  [[ "${CHROME_AUDIT_APPEND_ONLY:-1}" == "1" ]] || return 0
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  chflags uappnd "$1" 2> /dev/null || true
+}
+
+_chrome_audit_clear_append_only() {
+  [[ "${CHROME_AUDIT_APPEND_ONLY:-1}" == "1" ]] || return 0
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  chflags nouappnd "$1" 2> /dev/null || true
+}
+
+_chrome_audit_rotate_if_needed() {
+  local log_path="$1"
+  [[ -f "$log_path" ]] || return 0
+  local size threshold
+  size=$(_chrome_audit_size "$log_path")
+  threshold=$(_chrome_audit_rotate_threshold)
+  [[ "$size" -ge "$threshold" ]] || return 0
+
+  # Contention → skip; next writer will retry. Never block the audit path.
+  _chrome_audit_lock || return 0
+
+  # Double-check under lock: a peer writer may have rotated already.
+  size=$(_chrome_audit_size "$log_path")
+  if [[ "$size" -ge "$threshold" ]]; then
+    local rotated="${log_path}.1"
+    _chrome_audit_clear_append_only "$log_path"
+    if [[ -f "$rotated" ]]; then
+      _chrome_audit_clear_append_only "$rotated"
+      rm -f "$rotated" 2> /dev/null
+    fi
+    mv -f "$log_path" "$rotated" 2> /dev/null
+    (umask 077 && : > "$log_path")
+    _chrome_audit_set_append_only "$rotated"
+    _chrome_audit_set_append_only "$log_path"
+  fi
+  _chrome_audit_unlock
+}
+
 # Append one JSONL entry to the audit log. Per NFR-SR-V2-14 (JSON-encoded
-# control char sanitization via jq --arg). chflags append-only enforcement
-# (NFR-SR-V2-16) deferred to v0.8.1.
+# control char sanitization via jq --arg) + NFR-SR-V2-16 (chflags append-only)
+# + NFR-SR-V2-AUDIT-ROT (size-triggered single-slot rotation under mkdir lock).
 _chrome_audit_append() {
   # Args: action outcome url selector element_text reason phase
   local action="$1" outcome="$2" url="$3" selector="$4"
@@ -1117,10 +1295,13 @@ _chrome_audit_append() {
   local log_path
   log_path=$(_chrome_audit_log_path)
 
-  # Create with 0600 on first write
+  # Create with 0600 on first write, then mark append-only.
   if [[ ! -f "$log_path" ]]; then
     (umask 077 && : > "$log_path")
+    _chrome_audit_set_append_only "$log_path"
   fi
+
+  _chrome_audit_rotate_if_needed "$log_path"
 
   local timestamp
   timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -1465,6 +1646,42 @@ _chrome_safety_check_js() {
     };
     const _fire = function(rail) { result.fired_rail_trace.push(rail); };
 
+    // NFR-SR-V2-2: script-confusables fold (Cyrillic / Greek / Armenian Latin-lookalikes)
+    // plus zero-width + BiDi override + combining-mark strip. Covers NFKC blind spot
+    // where distinct-script codepoints (Cyrillic \\u0430 "a", Greek \\u03BF "o", etc.)
+    // render visually identical to Latin but never decompose via NFKC.
+    const _CONFUSABLES_FOLD = {
+      "\\u0430":"a","\\u0435":"e","\\u043E":"o","\\u0440":"p","\\u0441":"c","\\u0443":"y","\\u0445":"x",
+      "\\u0456":"i","\\u0458":"j","\\u0455":"s","\\u0501":"d","\\u051B":"q","\\u051D":"w","\\u0451":"e",
+      "\\u049B":"k","\\u04CF":"i","\\u0433":"r","\\u0434":"d","\\u0432":"b","\\u043A":"k","\\u043C":"m",
+      "\\u043D":"h","\\u0442":"t","\\u0454":"e",
+      "\\u0131":"i","\\u0261":"g",
+      "\\u0410":"a","\\u0412":"b","\\u0415":"e","\\u041A":"k","\\u041C":"m","\\u041D":"h","\\u041E":"o",
+      "\\u0420":"p","\\u0421":"c","\\u0422":"t","\\u0425":"x","\\u0423":"y","\\u0405":"s","\\u0406":"i",
+      "\\u0408":"j","\\u04AE":"y","\\u04C0":"i",
+      "\\u03B1":"a","\\u03BF":"o","\\u03C1":"p","\\u03BD":"v","\\u03B9":"i","\\u03BA":"k","\\u03B7":"n",
+      "\\u03B5":"e","\\u03C7":"x","\\u03C5":"u","\\u03BC":"u","\\u03C4":"t",
+      "\\u0391":"a","\\u0392":"b","\\u0395":"e","\\u0396":"z","\\u0397":"h","\\u0399":"i","\\u039A":"k",
+      "\\u039C":"m","\\u039D":"n","\\u039F":"o","\\u03A1":"p","\\u03A4":"t","\\u03A5":"y","\\u03A7":"x",
+      "\\u0561":"a","\\u0578":"n","\\u057D":"u","\\u057C":"n","\\u0585":"o","\\u0581":"g","\\u0566":"q",
+      "\\u0570":"h","\\u0574":"u","\\u057A":"u"
+    };
+    function _foldConfusables(s) {
+      if (!s) return "";
+      // NFKD decomposes precomposed chars (café → cafe+́) so we can strip the
+      // combining marks. NFKC would re-compose and defeat the strip.
+      try { s = s.normalize("NFKD"); } catch (_) {}
+      // Strip combining marks, zero-width, BiDi overrides, BOM, invisible separators
+      s = s.replace(/[\\u0300-\\u036F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\uFEFF]/g, "");
+      let out = "";
+      for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (c.charCodeAt(0) < 0x80) { out += c; continue; }
+        out += _CONFUSABLES_FOLD[c] || c;
+      }
+      return out;
+    }
+
     _fire("element_lookup");
     const el = _QS(sel);
     if (!el) {
@@ -1500,9 +1717,9 @@ _chrome_safety_check_js() {
     }
 
     const raw_text = gatherAllText(el, 0);
-    // NFR-SR-V2-2: NFKC + zero-width stripping (full TR39 confusables deferred)
-    const norm_text = raw_text.normalize("NFKC")
-      .replace(/[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]/g, "");
+    // NFR-SR-V2-2: full script-confusables fold (_foldConfusables handles NFKC,
+    // zero-width / BiDi / combining strip, and Cyrillic/Greek/Armenian fold).
+    const norm_text = _foldConfusables(raw_text);
     result.element_text = norm_text.slice(0, 200);
 
     // 3-ancestor walk checking text + exhaustive attribute list (NFR-SR-V2-10)
@@ -1514,9 +1731,7 @@ _chrome_safety_check_js() {
     _fire("ancestor_text_walk");
     for (let depth = 0; depth < 3 && node; depth++) {
       // Text check using full gatherAllText (includes shadow DOM + ::before/::after)
-      const node_text = gatherAllText(node, 0)
-        .normalize("NFKC")
-        .replace(/[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]/g, "");
+      const node_text = _foldConfusables(gatherAllText(node, 0));
       if (lex_re.test(node_text)) {
         result.blocked_reason = "purchase_button_text_depth_" + depth;
         return JSON.stringify(result);
@@ -1525,7 +1740,7 @@ _chrome_safety_check_js() {
       if (node.getAttribute) {
         for (const attr of attrs_to_check) {
           const val = node.getAttribute(attr) || "";
-          if (val && lex_re.test(val.normalize("NFKC"))) {
+          if (val && lex_re.test(_foldConfusables(val))) {
             result.blocked_reason = "purchase_button_attr_" + attr + "_depth_" + depth;
             return JSON.stringify(result);
           }
@@ -1563,6 +1778,35 @@ _chrome_safety_check_js() {
     if (rect.width < 1 || rect.height < 1) {
       result.blocked_reason = "zero_dimensions";
       return JSON.stringify(result);
+    }
+
+    // TOCTOU fingerprint (NFR-SR-V2-TOCTOU): lock the element's outerHTML hash
+    // and bounding-rect snapshot so the dispatch step can detect DOM mutation
+    // between safety-pass and click. FNV-1a 32-bit — integrity signal, not
+    // cryptographic. outerHTML truncated to 5000 chars to bound the hash input.
+    function _fnv1a(s) {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+      }
+      return h.toString(16);
+    }
+    try {
+      const _fp_rect = el.getBoundingClientRect();
+      result.element_fingerprint = {
+        tag: el.tagName || "",
+        id: el.id || "",
+        outerHTML_hash: _fnv1a((el.outerHTML || "").slice(0, 5000)),
+        rect: {
+          x: Math.round(_fp_rect.left),
+          y: Math.round(_fp_rect.top),
+          w: Math.round(_fp_rect.width),
+          h: Math.round(_fp_rect.height)
+        }
+      };
+    } catch (_) {
+      result.element_fingerprint = null;
     }
 
     // All checks passed — action is allowed
@@ -1716,8 +1960,11 @@ chrome_click() {
   # `element.click()` alone is insufficient for React 18+/Vue 3 components
   # that listen on pointerdown. Full sequence: pointerdown → mousedown →
   # pointerup → mouseup → click, with coordinates from getBoundingClientRect
-  # center. Includes element.isConnected verification (NFR-SR-V2-6) and
-  # elementFromPoint hit-test (NFR-JS-V2-5) as a partial visibility guard.
+  # center. Includes element.isConnected verification (NFR-SR-V2-6),
+  # elementFromPoint hit-test (NFR-JS-V2-5), and TOCTOU fingerprint compare
+  # against the safety-check envelope (NFR-SR-V2-TOCTOU).
+  local expected_fp
+  expected_fp=$(printf '%s' "$check_result" | jq -c '.element_fingerprint // null' 2> /dev/null || printf 'null')
   local click_js
   click_js=$(
     cat << JSEOF
@@ -1726,6 +1973,15 @@ chrome_click() {
     const _QS = document.querySelector.bind(document);
     const _GCS = window.getComputedStyle.bind(window);
     const _EFP = document.elementFromPoint.bind(document);
+    const _EXPECTED_FP = ${expected_fp};
+    function _fnv1a(s) {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+      }
+      return h.toString(16);
+    }
     const el = _QS(${sel_json});
     if (!el) return JSON.stringify({ok:false,error:"element_vanished"});
     if (!el.isConnected) return JSON.stringify({ok:false,error:"element_detached"});
@@ -1734,6 +1990,29 @@ chrome_click() {
     }
     el.scrollIntoView({block:"center", inline:"center", behavior:"instant"});
     const rect = el.getBoundingClientRect();
+    // TOCTOU drift check: recompute fingerprint, compare against safety snapshot.
+    // Tag/id/outerHTML_hash are exact-match; rect allows 4px jitter for layout reflow.
+    if (_EXPECTED_FP) {
+      const _cur_fp = {
+        tag: el.tagName || "",
+        id: el.id || "",
+        outerHTML_hash: _fnv1a((el.outerHTML || "").slice(0, 5000)),
+        rect: {x: Math.round(rect.left), y: Math.round(rect.top),
+               w: Math.round(rect.width), h: Math.round(rect.height)}
+      };
+      const drift = [];
+      if (_cur_fp.tag !== _EXPECTED_FP.tag) drift.push("tag");
+      if (_cur_fp.id !== _EXPECTED_FP.id) drift.push("id");
+      if (_cur_fp.outerHTML_hash !== _EXPECTED_FP.outerHTML_hash) drift.push("outerHTML_hash");
+      const er = _EXPECTED_FP.rect || {x:0,y:0,w:0,h:0};
+      if (Math.abs(_cur_fp.rect.x - er.x) > 4 || Math.abs(_cur_fp.rect.y - er.y) > 4 ||
+          Math.abs(_cur_fp.rect.w - er.w) > 4 || Math.abs(_cur_fp.rect.h - er.h) > 4) {
+        drift.push("rect");
+      }
+      if (drift.length > 0) {
+        return JSON.stringify({ok:false, error:"toctou_drift", drift:drift});
+      }
+    }
     if (rect.width < 1 || rect.height < 1) {
       return JSON.stringify({ok:false,error:"zero_dimensions"});
     }
@@ -1777,6 +2056,15 @@ JSEOF
       "$(_chrome_json_stringify_sh "$selector")" \
       "$(_chrome_json_stringify_sh "$current_url")"
     return 0
+  elif [[ "$click_result" == *'"error":"toctou_drift"'* ]]; then
+    local drift_fields
+    drift_fields=$(printf '%s' "$click_result" | jq -c '.drift // []' 2> /dev/null || printf '[]')
+    _chrome_audit_append "click" "blocked" "$current_url" "$selector" "" "toctou_drift" "post_execute" 2> /dev/null || true
+    printf '{"ok":false,"error":"SAFETY_BLOCK","reason":"toctou_drift","drift":%s,"selector":%s,"url":%s}\n' \
+      "$drift_fields" \
+      "$(_chrome_json_stringify_sh "$selector")" \
+      "$(_chrome_json_stringify_sh "$current_url")"
+    return 1
   else
     _chrome_audit_append "click" "dispatch_failed" "$current_url" "$selector" "" "" "post_execute" 2> /dev/null || true
     printf '{"ok":false,"error":"CLICK_DISPATCH_FAILED","selector":%s,"url":%s}\n' \
@@ -1991,9 +2279,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     window_for) chrome_window_for "$@" ;;
     tab_for_url) chrome_tab_for_url "$@" ;;
     js) chrome_js "$@" ;;
+    js_async) chrome_js_async "$@" ;;
     navigate) chrome_navigate "$@" ;;
     new_tab) chrome_new_tab "$@" ;;
     tab_url) chrome_tab_url "$@" ;;
+    tab_title) chrome_tab_title "$@" ;;
     debug) chrome_debug ;;
     profile_urls)
       _chrome_err "profile_urls was removed in v0.4.0 (SNSS parser eliminated)"
@@ -2007,6 +2297,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     click) chrome_click "$@" ;;
     query) chrome_query "$@" ;;
     wait_for) chrome_wait_for "$@" ;;
+    _emit_js_async_wrapper)
+      # Hidden CLI verb for test harness (PR #23).
+      # Usage: chrome-lib.sh _emit_js_async_wrapper <sentinel> <user_js>
+      _wrap_sentinel_json=$(_chrome_json_stringify_sh "${1:-test_sentinel}")
+      _chrome_js_async_wrapper "$_wrap_sentinel_json" "${2:-return 42;}"
+      unset _wrap_sentinel_json
+      ;;
     _emit_safety_js)
       # Hidden CLI verb for test harness (feature 006 T006).
       # Usage: chrome-lib.sh _emit_safety_js <selector>
