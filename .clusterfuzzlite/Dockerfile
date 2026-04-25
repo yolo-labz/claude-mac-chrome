@@ -1,7 +1,11 @@
 FROM node:20-bookworm@sha256:8789e1e0752d81088a085689c04fdb7a5b16e8102e353118a4b049bbf05db8ac AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash jq radamsa \
+    bash jq build-essential ca-certificates git \
+  && git clone --depth 1 https://gitlab.com/akihe/radamsa.git /tmp/radamsa \
+  && cd /tmp/radamsa && make && make install && cd / && rm -rf /tmp/radamsa \
+  && apt-get purge -y build-essential git \
+  && apt-get autoremove -y \
   && rm -rf /var/lib/apt/lists/*
 
 COPY . /src
