@@ -1,7 +1,7 @@
 # Stealth + framing lint per vault constitution principle IX (Pedro G&P contract active).
 # Catches AI-generated content that drifts into forbidden topics:
-#   job-search / open-to-work / recruiter outreach / CV tailoring / career retrospective
-# OR leaks employer names: Gauge / Pierson / Sciensa / Pearson / ASA-Bank / Stefanini-Gauge.
+#   job-search / open-to-work / recruiter outreach / CV tailoring / career retrospective # stealth-allow
+# OR leaks employer names: Gauge / Pierson / Sciensa / Pearson / ASA-Bank / Stefanini-Gauge. # stealth-allow
 #
 # Skips: CHANGELOG.md, fixtures/, tests/bats/, schemas/, drafts/, node_modules/, .next/, dist/.
 # Per-line opt-out: append `# stealth-allow` (markdown/yaml/sh) or `// stealth-allow` (ts/js)
@@ -36,28 +36,28 @@ jobs:
         run: |
           set -uo pipefail
 
-          # Forbidden patterns. ERE syntax (grep -E).
+          # Forbidden patterns. ERE syntax (grep -E). # stealth-allow
           # Each pattern intentionally narrow to minimize false positives.
           declare -a patterns=(
-            'job[ -]?search'
-            'open[ -]?to[ -]?work'
-            'recruiter pipelin'
-            'recruiter outreach'
-            'recruiter triage'
-            'tailor[ -]?CV|CV[ -]?tailor|resume tailor'
-            'book[ -]?slot|take[ -]?home test|calendly book'
-            'next chapter|new opportunit'
-            '\bhire me\b|\bnext role\b|\bavailable for\b'
-            'what.{1,15}taught me|what.{1,15}bought me'
-            'what.{1,15}learned'
-            'how I (do|run|prepare|batch|structure)\b'
-            'Why I (stopped|started|switched|moved)'
-            '\bGauge\b'
-            '\bPierson\b'
-            '\bSciensa\b'
-            '\bPearson\b'
-            'ASA[ -]?(Bank|Investments)'
-            'Stefanini[ -]?Gauge'
+            'job[ -]?search' # stealth-allow
+            'open[ -]?to[ -]?work' # stealth-allow
+            'recruiter pipelin' # stealth-allow
+            'recruiter outreach' # stealth-allow
+            'recruiter triage' # stealth-allow
+            'tailor[ -]?CV|CV[ -]?tailor|resume tailor' # stealth-allow
+            'book[ -]?slot|take[ -]?home test|calendly book' # stealth-allow
+            'next chapter|new opportunit' # stealth-allow
+            '\bhire me\b|\bnext role\b|\bavailable for\b' # stealth-allow
+            'what.{1,15}taught me|what.{1,15}bought me' # stealth-allow
+            'what.{1,15}learned' # stealth-allow
+            'how I (do|run|prepare|batch|structure)\b' # stealth-allow
+            'Why I (stopped|started|switched|moved)' # stealth-allow
+            '\bGauge\b' # stealth-allow
+            '\bPierson\b' # stealth-allow
+            '\bSciensa\b' # stealth-allow
+            '\bPearson\b' # stealth-allow
+            'ASA[ -]?(Bank|Investments)' # stealth-allow
+            'Stefanini[ -]?Gauge' # stealth-allow
           )
 
           # Public-surface files only.
