@@ -1,0 +1,91 @@
+# Stealth + framing lint per vault constitution principle IX (Pedro G&P contract active).
+# Catches AI-generated content that drifts into forbidden topics:
+#   job-search / open-to-work / recruiter outreach / CV tailoring / career retrospective
+# OR leaks employer names: Gauge / Pierson / Sciensa / Pearson / ASA-Bank / Stefanini-Gauge.
+#
+# Skips: CHANGELOG.md, fixtures/, tests/bats/, schemas/, drafts/, node_modules/, .next/, dist/.
+# Per-line opt-out: append `# stealth-allow` (markdown/yaml/sh) or `// stealth-allow` (ts/js)
+# or `<!-- stealth-allow -->` (html) on any line that legitimately discusses these terms
+# (e.g. an audit doc that quotes the forbidden patterns).
+#
+# Companion to no-employer-name-leak.yml (which only catches employer NAMES,
+# not the framing patterns that surface them).
+
+name: no-ai-slips
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: stealth + framing terms
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Scan public-surface files for forbidden terms
+        run: |
+          set -uo pipefail
+
+          # Forbidden patterns. ERE syntax (grep -E).
+          # Each pattern intentionally narrow to minimize false positives.
+          declare -a patterns=(
+            'job[ -]?search'
+            'open[ -]?to[ -]?work'
+            'recruiter pipelin'
+            'recruiter outreach'
+            'recruiter triage'
+            'tailor[ -]?CV|CV[ -]?tailor|resume tailor'
+            'book[ -]?slot|take[ -]?home test|calendly book'
+            'next chapter|new opportunit'
+            '\bhire me\b|\bnext role\b|\bavailable for\b'
+            'what.{1,15}taught me|what.{1,15}bought me'
+            'what.{1,15}learned'
+            'how I (do|run|prepare|batch|structure)\b'
+            'Why I (stopped|started|switched|moved)'
+            '\bGauge\b'
+            '\bPierson\b'
+            '\bSciensa\b'
+            '\bPearson\b'
+            'ASA[ -]?(Bank|Investments)'
+            'Stefanini[ -]?Gauge'
+          )
+
+          # Public-surface files only.
+          mapfile -t FILES < <(git ls-files \
+            | grep -E '\.(md|yml|yaml|json|html|tsx?|jsx?)$' \
+            | grep -v -E '(^|/)(node_modules|\.next|dist|build|fixtures|drafts|schemas|CHANGELOG\.md|tests/bats|tests/fixtures|\.specify|specs/[0-9])')
+
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "No public-surface files to scan. PASS."
+            exit 0
+          fi
+
+          fail=0
+          for pattern in "${patterns[@]}"; do
+            # Match pattern, then drop lines with stealth-allow opt-out marker.
+            hits=$(printf '%s\n' "${FILES[@]}" \
+              | xargs -d '\n' grep -niE -- "$pattern" 2>/dev/null \
+              | grep -v 'stealth-allow' || true)
+            if [ -n "$hits" ]; then
+              echo "::error::Forbidden term match (pattern: $pattern)"
+              echo "$hits" | sed 's/^/  /'
+              fail=$((fail + 1))
+            fi
+          done
+
+          if [ "$fail" -gt 0 ]; then
+            echo ""
+            echo "::error::$fail forbidden-pattern match(es). Per vault constitution principle IX (G&P contract active) + CLAUDE.md framing rules, public surfaces must not contain job-search / recruiter / career retrospective framing or employer-name leaks. Reframe capability-first or add 'stealth-allow' marker on legitimate-context lines."
+            exit 1
+          fi
+          echo "PASS: no forbidden terms in ${#FILES[@]} public-surface file(s)"
