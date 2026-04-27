@@ -1161,19 +1161,29 @@ chrome_restore() {
 
 # URL blocklist (readonly, NOT overridable) — NFR-SR-2
 readonly -a CHROME_URL_BLOCKLIST=(
-  "*/checkout*"
-  "*/payment*"
-  "*/billing*"
-  "*/subscribe*"
-  "*/upgrade*"
-  "*/cart/*"
-  "*/gp/buy/*"
-  "*checkout.stripe.com/*"
-  "*.paypal.com/checkout/*"
-  "*buy.stripe.com/*"
-  "*pay.google.com/*"
-  "*account.proton.me/*upgrade*"
-  "*account.proton.me/*dashboard*"
+  # Token-anywhere patterns — match the token in any URL position, including
+  # mutations where the path separator was rewritten to a dot or a Unicode
+  # confusable was injected. T056 nightly fuzz (radamsa) confirms this catches
+  # all 1000 mutations vs the prior `*/checkout*`-style patterns that bypassed
+  # on `https://example.com.subscribe/premium` and similar.
+  #
+  # Tradeoff: more aggressive over-block on benign URLs that happen to contain
+  # these tokens (e.g. `news.example.com/upgrade-tips`). The plugin's contract
+  # is human-confirm-before-action — an over-block costs one extra prompt; an
+  # under-block costs an unintended payment.
+  "*checkout*"
+  "*payment*"
+  "*billing*"
+  "*subscribe*"
+  "*upgrade*"
+  "*cart*"
+  "*gp/buy*"
+  "*checkout.stripe.com*"
+  "*paypal.com/checkout*"
+  "*buy.stripe.com*"
+  "*pay.google.com*"
+  "*account.proton.me*upgrade*"
+  "*account.proton.me*dashboard*"
   "*accounts.google.com/signin*"
 )
 
