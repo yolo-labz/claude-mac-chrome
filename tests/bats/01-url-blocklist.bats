@@ -123,3 +123,42 @@ setup() {
 @test "blocklist: URL fragment on upgrade is blocked" {
   _chrome_check_url_blocklist "https://example.com/upgrade#plan-premium"
 }
+
+# ─── Case-folding regression — fuzz issue #37 ──────────────────────────
+# radamsa mutated `checkout` → `cHeckout`, which bypassed the substring
+# match because the comparison was case-sensitive. Patterns are authored
+# in lowercase; URLs MUST be lowercased before matching. RFC 3986 §3.2.2
+# makes hostnames case-insensitive, and paths are conventionally case-
+# insensitive on the platforms we target.
+
+@test "blocklist: mixed-case 'cHeckout' path is blocked (fuzz #37 regression)" {
+  _chrome_check_url_blocklist "https://www.paypal.com/cHeckout/review"
+}
+
+@test "blocklist: uppercase 'CHECKOUT' path is blocked" {
+  _chrome_check_url_blocklist "https://example.com/CHECKOUT/cart"
+}
+
+@test "blocklist: mixed-case 'UpGrAdE' path is blocked" {
+  _chrome_check_url_blocklist "https://account.proton.me/u/0/subscription/UpGrAdE"
+}
+
+@test "blocklist: mixed-case 'BiLLiNg' path is blocked" {
+  _chrome_check_url_blocklist "https://example.com/BiLLiNg/subscription"
+}
+
+@test "blocklist: mixed-case 'SuBsCrIbE' path is blocked" {
+  _chrome_check_url_blocklist "https://example.com/SuBsCrIbE/premium"
+}
+
+@test "blocklist: mixed-case 'CART' path is blocked" {
+  _chrome_check_url_blocklist "https://example.com/CART/123"
+}
+
+@test "blocklist: uppercase host 'CHECKOUT.STRIPE.COM' is blocked" {
+  _chrome_check_url_blocklist "https://CHECKOUT.STRIPE.COM/pay/cs_test"
+}
+
+@test "blocklist: mixed-case 'PaYpAl.com/CheckOut' is blocked" {
+  _chrome_check_url_blocklist "https://www.PaYpAl.com/CheckOut/review"
+}

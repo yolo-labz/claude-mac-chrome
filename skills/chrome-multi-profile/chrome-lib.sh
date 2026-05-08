@@ -1213,8 +1213,17 @@ readonly -a CHROME_URL_BLOCKLIST=(
 # Check if a URL matches any blocklist pattern. Returns 0 (match/blocked),
 # 1 (clear). Uses `[[ == pattern ]]` which is consistent across bash 3.2
 # (macOS system bash) through 5.3 regardless of shell option state.
+#
+# Case-folds the URL to lowercase before matching — patterns are authored in
+# lowercase, and an attacker (or radamsa mutation) can otherwise bypass the
+# token check with mixed case (e.g. `cHeckout`, `PaYpAl.com`). T056 fuzz
+# regression #37 caught this: `cHeckout` evaded `*checkout*`. URL hostnames
+# are case-insensitive per RFC 3986 §3.2.2 and paths are conventionally
+# case-insensitive on the platforms we target. Tradeoff documented in
+# CHROME_URL_BLOCKLIST comment above.
 _chrome_check_url_blocklist() {
   local url="$1" pattern
+  url="$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]')"
   for pattern in "${CHROME_URL_BLOCKLIST[@]}"; do
     # shellcheck disable=SC2053
     if [[ "$url" == $pattern ]]; then
