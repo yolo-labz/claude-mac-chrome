@@ -17,18 +17,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . /src
 WORKDIR /src
 
-# ClusterFuzzLite expects fuzz targets as executables in /out/.
-# Our fuzzers are shell + node scripts — wrap them as executable entry points.
-RUN mkdir -p /out && \
-    cp tests/fuzz/radamsa-urls.sh /out/fuzz_radamsa_urls && \
-    chmod +x /out/fuzz_radamsa_urls && \
-    printf '#!/usr/bin/env bash\nexec node /src/tests/fuzz/html-grammar.mjs --iterations="${1:-1000}"\n' > /out/fuzz_html_grammar && \
-    chmod +x /out/fuzz_html_grammar && \
-    printf '#!/usr/bin/env bash\nexec node /src/tests/fuzz/unicode-confusables.mjs\n' > /out/fuzz_unicode_confusables && \
-    chmod +x /out/fuzz_unicode_confusables
-
 # ClusterFuzzLite's OSS-Fuzz-derived contract requires a `compile`
 # executable on $PATH inside the container. Wire build.sh in as that
-# entry point so `Build fuzzers` finds it (#48).
+# entry point so `Build fuzzers` finds it (#48). build.sh generates
+# the fuzz_* wrappers into $OUT at compile time — pre-staging them
+# here under /out is pointless because CFL invokes the build container
+# with `--volumes-from <helper>` against a helper that declares /out
+# as a volume, which shadows any image-baked /out content with an
+# empty volume mount (#50).
 COPY .clusterfuzzlite/build.sh /usr/local/bin/compile
 RUN chmod +x /usr/local/bin/compile
