@@ -1,0 +1,26 @@
+{
+  "name": "claude-mac-chrome",
+  "owner": {
+    "name": "Pedro Henrique Souza Balbino",
+    "email": "pedrobalbino@proton.me"
+  },
+  "metadata": {
+    "description": "Professional Chrome automation for Claude Code on macOS via stable AppleScript IDs + Chrome Local State profile catalog",
+    "version": "1.1.1",
+    "homepage": "https://github.com/yolo-labz/claude-mac-chrome",
+    "license": "MIT",
+    "category": "productivity"
+  },
+  "plugins": [
+    {
+      "name": "claude-mac-chrome",
+      "source": "./",
+      "description": "Deterministic multi-profile Chrome automation on macOS. Reads Chrome's authoritative Local State profile catalog, extracts signed-in account emails from tab titles, and addresses windows/tabs via stable AppleScript string IDs. Zero user configuration, zero CDP, zero hardcoded URLs.",
+      "version": "1.1.1",
+      "author": {
+        "name": "Pedro Henrique Souza Balbino",
+        "email": "pedrobalbino@proton.me"
+      }
+    }
+  ]
+}
