@@ -281,7 +281,7 @@ A: Because the library talks to Chrome via Apple Events + AppleScript. A Linux p
 A: Because the motivating incident was an AI accidentally subscribing to a 1-month Proton Mail plan instead of 12-month. The entire safety gauntlet exists to make that kind of mistake mechanically impossible. TTY confirmation is the final backstop.
 
 **Q: Is the Portuguese trigger lexicon really mandatory?**
-A: Yes, for me. I have two Chrome profiles (UFPE and Sciensa) that regularly load pt-BR checkout pages. Without the pt-BR tokens (`comprar`, `assinar`, `pagar`, `finalizar`, `contratar`), an English-only regex would cheerfully click "Comprar agora". The lexicon is tested by `tests/bats/03-lexicon-loader.bats`.
+A: Yes, for me. I have two Chrome profiles (UFPE and Sciensa) that regularly load pt-BR checkout pages. Without the pt-BR tokens (`comprar`, `assinar`, `pagar`, `finalizar`, `contratar`), an English-only regex would cheerfully click "Comprar agora". The lexicon is tested by `tests/bats/03-lexicon-loader.bats`. <!-- stealth-allow -->
 
 **Q: Does this plugin call any external APIs?**
 A: No. Zero network calls. Zero telemetry. Everything is local.
