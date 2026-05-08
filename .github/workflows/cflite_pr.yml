@@ -23,6 +23,13 @@ jobs:
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: javascript
+          # Our three fuzz targets are thin wrappers generated at compile
+          # time from build.sh; they do not sit one-to-one against a
+          # source file CFL's affected-detection can match. Without this
+          # flag `mode: code-change` deletes ALL targets on any PR that
+          # does not touch tests/fuzz/**, which permanently breaks the
+          # build with "No fuzz targets found in out dir" (#50).
+          keep-unaffected-fuzz-targets: true
       - name: Run fuzzers
         id: run
         if: steps.build.outcome == 'success'
