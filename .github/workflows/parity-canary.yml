@@ -31,7 +31,7 @@ jobs:
           npx playwright test --grep "parity" --reporter=json > /tmp/playwright.json
       - name: Diff envelopes
         run: node tests/js-fixtures/parity-diff.mjs /tmp/happy-dom.json /tmp/playwright.json
-      - name: File P1 on divergence
+      - name: File or update P1 on divergence
         if: failure()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
@@ -39,12 +39,36 @@ jobs:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         with:
           script: |
+            // Dedup: find any open issue with the canonical title and append a
+            // run-link comment instead of opening another duplicate. Issues
+            // #16/#23/#29/#38 demonstrate the runaway-dup defect this fixes.
             const runId = process.env.RUN_ID;
             const repoUrl = process.env.REPO_URL;
-            await github.rest.issues.create({
+            const title = '[parity-canary] P1 — happy-dom diverged from real Chromium';
+            const body = `Run: ${repoUrl}/actions/runs/${runId}\n\n**Action required:** Review HAPPY-DOM-FIDELITY.md. A stubbed API may need to be upgraded to integration-only.`;
+            const open = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: '[parity-canary] P1 — happy-dom diverged from real Chromium',
-              body: `Run: ${repoUrl}/actions/runs/${runId}\n\n**Action required:** Review HAPPY-DOM-FIDELITY.md. A stubbed API may need to be upgraded to integration-only.`,
-              labels: ['parity', 'p1', 'security']
+              state: 'open',
+              labels: 'parity,p1',
+              per_page: 100,
             });
+            const existing = open.find((i) => !i.pull_request && i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Recurrence: ${repoUrl}/actions/runs/${runId}`,
+              });
+              core.notice(`Recurrence appended to #${existing.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['parity', 'p1', 'security'],
+              });
+              core.notice(`Filed new issue #${created.data.number}`);
+            }
