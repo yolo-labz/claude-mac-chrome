@@ -38,7 +38,7 @@ jobs:
         run: node tests/fuzz/html-grammar.mjs --iterations=10000
       - name: Fuzz Unicode confusables
         run: node tests/fuzz/unicode-confusables.mjs
-      - name: File issue on crash
+      - name: File or update issue on crash
         if: failure()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
@@ -46,12 +46,36 @@ jobs:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         with:
           script: |
+            // Dedup: find any open issue with the canonical title and append a
+            // run-link comment instead of opening another duplicate. 12+ open
+            // fuzz auto-issues demonstrate the runaway-dup defect this fixes.
             const runId = process.env.RUN_ID;
             const repoUrl = process.env.REPO_URL;
-            await github.rest.issues.create({
+            const title = '[fuzz] P1 — crash or envelope violation in nightly fuzz run';
+            const body = `Run: ${repoUrl}/actions/runs/${runId}\n\nSee logs for reproducer.`;
+            const open = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `[fuzz] P1 — crash or envelope violation in nightly fuzz run`,
-              body: `Run: ${repoUrl}/actions/runs/${runId}\n\nSee logs for reproducer.`,
-              labels: ['fuzz', 'p1', 'security']
+              state: 'open',
+              labels: 'fuzz,p1',
+              per_page: 100,
             });
+            const existing = open.find((i) => !i.pull_request && i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Recurrence: ${repoUrl}/actions/runs/${runId}`,
+              });
+              core.notice(`Recurrence appended to #${existing.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['fuzz', 'p1', 'security'],
+              });
+              core.notice(`Filed new issue #${created.data.number}`);
+            }
