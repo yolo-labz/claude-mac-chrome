@@ -104,6 +104,20 @@ git clone https://github.com/yolo-labz/claude-mac-chrome.git ~/.claude/plugins/l
 /plugin marketplace add ~/.claude/plugins/local/claude-mac-chrome
 ```
 
+## Requirements
+
+- **macOS** with Google Chrome installed.
+- **Bash 4.0+.** macOS ships `/bin/bash` 3.2.57 (frozen since 2007 due to GPL3 licensing); `chrome-lib.sh` uses `mapfile` and associative arrays which need 4.0+. Install a modern bash:
+  ```bash
+  brew install bash
+  # Apple Silicon:
+  echo 'export PATH="/opt/homebrew/bin:$PATH"' >> ~/.zshrc
+  # Intel:
+  echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.zshrc
+  ```
+  Open a new terminal afterwards. The library refuses to run under Bash 3.x and prints the same hint on first invocation.
+- **Python 3** (ships with macOS Command Line Tools).
+
 ## One-time setup
 
 **Enable JavaScript from Apple Events** in every Chrome profile you want to automate:

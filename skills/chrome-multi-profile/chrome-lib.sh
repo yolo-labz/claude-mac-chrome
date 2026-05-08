@@ -72,6 +72,29 @@
 # repository, contains no personal info the user hasn't explicitly chosen to put
 # there, and is entirely optional.
 
+# ---------------------------------------------------------------------------
+# Bash version preflight — fail fast with an actionable diagnostic.
+# ---------------------------------------------------------------------------
+# This library uses `mapfile` and `local -A` (associative arrays), both of
+# which require Bash 4.0+. macOS ships /bin/bash 3.2.57 (frozen since 2007 due
+# to GPL3 licensing), so `#!/usr/bin/env bash` resolves to 3.2 unless the user
+# has prepended a Homebrew bash directory to PATH. Without this guard the
+# script fails deep inside helper functions with `mapfile: command not found`,
+# which gives no hint about the root cause.
+if [ -z "${BASH_VERSINFO+x}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  printf '[chrome-lib] error: Bash 4.0+ required (found: %s)\n' \
+    "${BASH_VERSION:-unknown}" >&2
+  printf '[chrome-lib]   macOS ships /bin/bash 3.2.57 (frozen since 2007 due to GPL3 licensing).\n' >&2
+  printf '[chrome-lib]   Install a modern bash and prepend it to PATH:\n' >&2
+  printf '[chrome-lib]     brew install bash\n' >&2
+  printf '[chrome-lib]     # Apple Silicon:\n' >&2
+  printf '[chrome-lib]     echo "export PATH=\\"/opt/homebrew/bin:$PATH\\"" >> ~/.zshrc\n' >&2
+  printf '[chrome-lib]     # Intel:\n' >&2
+  printf '[chrome-lib]     echo "export PATH=\\"/usr/local/bin:$PATH\\"" >> ~/.zshrc\n' >&2
+  printf '[chrome-lib]   Then open a new terminal and re-run.\n' >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 readonly CHROME_USER_DATA="${CHROME_USER_DATA_DIR:-$HOME/Library/Application Support/Google/Chrome}"
 readonly CHROME_LOCAL_STATE="$CHROME_USER_DATA/Local State"
 readonly CHROME_CACHE="${TMPDIR:-/tmp}/chrome-fingerprint.json"
