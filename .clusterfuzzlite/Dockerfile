@@ -26,3 +26,9 @@ RUN mkdir -p /out && \
     chmod +x /out/fuzz_html_grammar && \
     printf '#!/usr/bin/env bash\nexec node /src/tests/fuzz/unicode-confusables.mjs\n' > /out/fuzz_unicode_confusables && \
     chmod +x /out/fuzz_unicode_confusables
+
+# ClusterFuzzLite's OSS-Fuzz-derived contract requires a `compile`
+# executable on $PATH inside the container. Wire build.sh in as that
+# entry point so `Build fuzzers` finds it (#48).
+COPY .clusterfuzzlite/build.sh /usr/local/bin/compile
+RUN chmod +x /usr/local/bin/compile
