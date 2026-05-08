@@ -1,4 +1,4 @@
-#!/bin/bash -eu
+#!/bin/bash -eux
 # ClusterFuzzLite build script. Generates fuzz target wrappers into $OUT.
 #
 # Our fuzzers are shell + node scripts, not compiled libFuzzer binaries,
@@ -6,11 +6,17 @@
 # CFL's fuzzing harness can invoke.
 #
 # IMPORTANT: this generation must happen here, not in the Dockerfile.
-# CFL invokes the build container with `--volumes-from <helper>` against
-# a helper that declares /out as a volume; that mount shadows any
-# /out/fuzz_* files baked into the image, so pre-staging them in the
-# Dockerfile silently no-ops at runtime (#50). build.sh runs AFTER the
-# volume mount, so wrappers written into $OUT here actually persist.
+# CFL invokes the build container with `--volumes-from <helper>` and an
+# `OUT=...` env that points at a host-bind path the helper provides;
+# any /out/fuzz_* files baked into the image are unreachable at runtime
+# (either shadowed by the helper's /out volume or simply written into
+# the wrong dir relative to $OUT). build.sh runs AFTER the volume
+# mount with the correct $OUT in scope, so wrappers written here
+# actually persist (#50).
+
+# Belt-and-suspenders: $OUT is provided by CFL but the directory
+# itself may not pre-exist inside the build container.
+mkdir -p "$OUT"
 
 # Wrapper 1: radamsa-driven URL fuzzer (existing shell script).
 cp /src/tests/fuzz/radamsa-urls.sh "$OUT/fuzz_radamsa_urls"
