@@ -2,6 +2,7 @@
   "name": "claude-mac-chrome-integration",
   "version": "1.0.0-integration",
   "private": true,
+  "type": "module",
   "description": "Playwright integration suite for claude-mac-chrome. Isolated from runtime. Excluded from release tarball per scripts/build-release.sh.",
   "scripts": {
     "test": "playwright test",
