@@ -381,3 +381,9 @@ The insight that Chrome's own `Local State` file can serve as an authoritative p
 - [yolo-labz/kokoro-speakd](https://github.com/yolo-labz/kokoro-speakd) — TTS daemon for spoken status feedback during long browser-automation runs.
 - Architecture deep-dives on multi-profile detection + cliclick + isTrusted bypass: [blog.home301server.com.br](https://blog.home301server.com.br).
 - Author portfolio: [portfolio.home301server.com.br](https://portfolio.home301server.com.br).
+
+---
+
+## Services
+
+Compliance-grade AI architecture for regulated workloads — async-first, USD-denominated, LATAM-based / EN-fluent. See [blog.home301server.com.br/services](https://blog.home301server.com.br/services/).
