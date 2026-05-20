@@ -66,10 +66,24 @@ const BLOCKED_REASONS = new Set([
 
 // --- Extract safety JS from chrome-lib.sh ------------------------------
 
+// chrome-lib.sh uses `local -A` and `mapfile`, which require bash 4.0+.
+// macOS ships /bin/bash 3.2.57, so prefer a Homebrew-installed bash when
+// available. Honors $BASH_BIN for explicit override (e.g. from CI workflow).
+function resolveBashBin() {
+  if (process.env.BASH_BIN && existsSync(process.env.BASH_BIN)) {
+    return process.env.BASH_BIN;
+  }
+  for (const candidate of ["/opt/homebrew/bin/bash", "/usr/local/bin/bash"]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return "bash";
+}
+const BASH_BIN = resolveBashBin();
+
 function emitSafetyJs(selector, _lexicon) {
   // _emit_safety_js is a CLI dispatch verb in chrome-lib.sh main().
   // Invoke via bash: `bash chrome-lib.sh _emit_safety_js <selector>`.
-  const res = spawnSync("bash", [LIB, "_emit_safety_js", selector]);
+  const res = spawnSync(BASH_BIN, [LIB, "_emit_safety_js", selector]);
   if (res.status !== 0) {
     throw new Error(`_emit_safety_js failed: ${res.stderr.toString()}`);
   }
