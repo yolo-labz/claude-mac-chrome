@@ -18,8 +18,7 @@
 NOTES.local.md
 TODO.local.md
 
-# AI development artifacts (never publish)
-CLAUDE.md
+# AI development artifacts (session-local — never publish)
 HANDOFF.md
 .specify/
 .claude/
