@@ -328,13 +328,22 @@ Highlights:
 
 ## Verifying releases
 
-The simplest way to verify a release is with the GitHub CLI (`gh >= 2.49.0`):
+The simplest way to verify a release is with the GitHub CLI (`gh >= 2.49.0`).
+Releases ship a native attestation bundle produced by
+`actions/attest-build-provenance@v4.1.0`, so a single command works without
+installing cosign or `slsa-verifier`:
 
 ```bash
 # Download the release tarball
 curl -sLO https://github.com/yolo-labz/claude-mac-chrome/releases/latest/download/claude-mac-chrome.tar.gz
 
-# Verify provenance attestation (checks Sigstore signature + SLSA provenance)
+# Verify the native provenance attestation in one command
+gh attestation verify ./claude-mac-chrome.tar.gz --owner yolo-labz
+```
+
+For a stricter check, pin the source workflow:
+
+```bash
 gh attestation verify ./claude-mac-chrome.tar.gz \
   --repo yolo-labz/claude-mac-chrome \
   --signer-workflow yolo-labz/claude-mac-chrome/.github/workflows/release.yml
@@ -344,7 +353,8 @@ If verification fails, **do not install**. File a security advisory.
 
 ### Advanced / Offline verification
 
-For environments without `gh`, you can verify using cosign or slsa-verifier directly:
+For environments without `gh` — or when you want to verify the cosign
+keyless signature or the SLSA L3 provenance separately — use these tools:
 
 ```bash
 # Download the release and its signature bundle
@@ -358,6 +368,10 @@ cosign verify-blob \
   --bundle claude-mac-chrome.tar.gz.sigstore \
   claude-mac-chrome.tar.gz
 ```
+
+The SLSA L3 provenance asset (`*.intoto.jsonl`) attached by the
+SLSA generator can be verified with
+[`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier).
 
 ## License
 
