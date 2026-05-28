@@ -1,0 +1,47 @@
+# lefthook.yml — Git hooks for claude-mac-chrome.
+#
+# Migrated from .pre-commit-config.yaml on 2026-05-28 (PR #64). Lefthook is
+# the canonical hook runner across yolo-labz/* per release-engineering canon
+# (faster than husky, single Go binary, parallel execution).
+#
+# Install once (matches sibling repos):
+#   brew install lefthook
+#   lefthook install
+#
+# Hooks run on every commit. Skip in emergencies with `lefthook run --no-tty`
+# but NEVER ship a commit that bypasses these silently. The CI pipeline runs
+# the same gates and will reject the PR.
+
+pre-commit:
+  parallel: true
+  commands:
+    shellcheck:
+      glob: "*.{sh,bash}"
+      run: shellcheck --severity=warning {staged_files}
+
+    shfmt:
+      glob: "*.{sh,bash}"
+      run: shfmt -d -i 2 -ci -bn {staged_files}
+
+    actionlint:
+      glob: ".github/workflows/*.yml"
+      run: actionlint {staged_files}
+
+    zizmor:
+      glob: ".github/workflows/*.yml"
+      run: zizmor {staged_files}
+
+    bats-syntax:
+      glob: "tests/bats/*.bats"
+      run: bats --count {staged_files}
+
+commit-msg:
+  commands:
+    conventional:
+      run: |
+        if ! grep -qE '^(feat|fix|refactor|chore|docs|ci|test|style|perf|build|revert)(\([a-z0-9-]+\))?!?: ' {1}; then
+          echo "Commit message must follow Conventional Commits format." >&2
+          echo "Examples: feat(safety): ...   fix(audit): ...   chore(dev): ..." >&2
+          echo "Allowed types: feat, fix, refactor, chore, docs, ci, test, style, perf, build, revert" >&2
+          exit 1
+        fi
