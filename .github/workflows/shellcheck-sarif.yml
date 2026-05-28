@@ -1,0 +1,93 @@
+name: ShellCheck SARIF
+
+# CodeQL has no Bash support (per release-engineering canon). This workflow
+# closes the static-analysis gap by running shellcheck against every shell
+# file in the repo, converting the json1 output to SARIF via the
+# psastras/sarif-rs `shellcheck-sarif` binary, and uploading the SARIF
+# document to GitHub's code-scanning dashboard. Findings then surface in the
+# repo's Security tab alongside CodeQL / Scorecard / OSV-Scanner results.
+#
+# Security note: no `run:` step in this workflow interpolates untrusted
+# GitHub event context (no `${{ github.event.* }}` shell-substitution).
+# All inputs are hardcoded constants or `find`-resolved repo paths.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Workflow-level deny-all; jobs re-grant per release-engineering canon.
+permissions: {}
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      # Required to upload SARIF to code-scanning.
+      security-events: write
+      # Required to read repo content + workflow context.
+      contents: read
+      actions: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck --version
+
+      - name: Install shellcheck-sarif converter
+        env:
+          SARIF_RS_VERSION: v0.8.0
+        run: |
+          set -euo pipefail
+          curl -sSL \
+            "https://github.com/psastras/sarif-rs/releases/download/shellcheck-sarif-${SARIF_RS_VERSION}/shellcheck-sarif-x86_64-unknown-linux-gnu" \
+            -o /usr/local/bin/shellcheck-sarif
+          chmod +x /usr/local/bin/shellcheck-sarif
+          shellcheck-sarif --version
+
+      - name: Run shellcheck + emit SARIF
+        run: |
+          set -euo pipefail
+          # Collect every shell file the repo cares about: scripts and the
+          # shipped library. `launch/` is included if it grows shell files.
+          mapfile -t shell_files < <(find scripts skills launch -type f \
+            \( -name '*.sh' -o -name '*.bash' \) 2>/dev/null | sort)
+
+          if [[ "${#shell_files[@]}" -eq 0 ]]; then
+            echo "No shell files found — emitting empty SARIF."
+            printf '%s\n' \
+              '{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"shellcheck","version":"0.0.0"}},"results":[]}]}' \
+              > shellcheck.sarif
+            exit 0
+          fi
+
+          printf 'Checking %d file(s):\n' "${#shell_files[@]}"
+          printf '  %s\n' "${shell_files[@]}"
+
+          # The shellcheck CLI exits non-zero on findings; capture but
+          # do not fail the step — SARIF upload is the source of truth.
+          shellcheck --external-sources --format=json1 \
+            "${shell_files[@]}" > shellcheck.json || true
+
+          shellcheck-sarif < shellcheck.json > shellcheck.sarif
+          echo "SARIF document written ($(wc -c < shellcheck.sarif) bytes)."
+
+      - name: Upload SARIF to code-scanning
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          sarif_file: shellcheck.sarif
+          category: shellcheck

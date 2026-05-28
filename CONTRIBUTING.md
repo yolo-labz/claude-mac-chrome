@@ -11,12 +11,13 @@ workflow, conventions, and compatibility requirements.
 - [bats-core](https://github.com/bats-core/bats-core) for shell unit tests
 - [shellcheck](https://github.com/koalaman/shellcheck) and [shfmt](https://github.com/mvdan/sh)
 - [jq](https://github.com/jqlang/jq)
-- [pre-commit](https://pre-commit.com/) (recommended)
+- [lefthook](https://github.com/evilmartians/lefthook) (recommended) for git hooks
+- [actionlint](https://github.com/rhysd/actionlint) + [zizmor](https://github.com/woodruffw/zizmor) for workflow linting
 
 Install test dependencies on macOS:
 
 ```bash
-brew install bash bats-core shellcheck shfmt jq
+brew install bash bats-core shellcheck shfmt jq lefthook actionlint zizmor
 ```
 
 ## Development loop
@@ -33,16 +34,23 @@ bats tests/bats/*.bats
 cd tests/integration && npx playwright test
 ```
 
-## Pre-commit hooks
+## Git hooks (lefthook)
 
 Install the hooks once:
 
 ```bash
-pre-commit install
+lefthook install
 ```
 
-This runs `zizmor` (GitHub Actions workflow linting), `actionlint` (Actions
-syntax checking), `shellcheck`, and `shfmt` on every commit.
+This runs `shellcheck`, `shfmt`, `actionlint` (Actions syntax checking),
+`zizmor` (Actions workflow security linting), and `bats --count`
+(syntax-only bats parse) on every commit, in parallel. The `commit-msg`
+hook validates Conventional Commits format. Configuration lives in
+`lefthook.yml`.
+
+Migrated from `.pre-commit-config.yaml` in PR #64. Lefthook is the
+canonical hook runner across yolo-labz/* (faster than husky, single Go
+binary, parallel execution).
 
 ## Bash 3.2 compatibility
 

@@ -1,0 +1,89 @@
+# cliff.toml — git-cliff config for claude-mac-chrome.
+#
+# Generates CHANGELOG.md from Conventional Commits in the
+# Keep-a-Changelog 1.1.0 format. Per release-engineering canon
+# (`hm_homenotroot.clauderulespluginreleaseengineering.md`):
+#   - Either git-cliff OR release-please is acceptable per repo.
+#     This repo uses git-cliff (single Rust binary, no npm).
+#   - Once cliff.toml owns CHANGELOG.md, never edit it by hand.
+#
+# Generate locally:   git cliff -o CHANGELOG.md
+# Preview next bump:  git cliff --bump --unreleased
+# Tag release:        git cliff --tag v1.2.0 -o CHANGELOG.md
+
+[changelog]
+# Keep-a-Changelog 1.1.0 header.
+header = """
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+
+# Template for each release block. Sections follow Keep-a-Changelog
+# ordering: Added / Changed / Deprecated / Removed / Fixed / Security.
+# Strips trailing "(#NNN)" PR-number trailer inline via regex_replace —
+# avoids double-rendering alongside the appended `(scope) (sha)`.
+body = """
+{% if version -%}
+## [{{ version | trim_start_matches(pat="v") }}] — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## [Unreleased]
+{% endif %}
+{% for group, commits in commits | group_by(attribute="group") -%}
+### {{ group | upper_first }}
+
+{% for commit in commits -%}
+- {% if commit.breaking %}**BREAKING:** {% endif -%}
+{{ commit.message | split(pat="\n") | first | trim | replace(from=" (#", to=" |||#") | split(pat="|||#") | first | trim | upper_first }}{% if commit.scope %} ({{ commit.scope }}){% endif %}{% if commit.id %} ({{ commit.id | truncate(length=7, end="") }}){% endif %}
+{% endfor %}
+{% endfor %}
+"""
+
+# No footer — Keep-a-Changelog has none.
+footer = ""
+
+# Trim leading/trailing whitespace.
+trim = true
+
+[git]
+# Conventional Commits parsing.
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+
+# Map commit prefixes to Keep-a-Changelog sections.
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Changed" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs", group = "Changed" },
+  { message = "^security", group = "Security" },
+  { message = "^revert", group = "Removed" },
+  { message = "^style", skip = true },
+  { message = "^test", skip = true },
+  { message = "^chore\\(deps", skip = true },
+  { message = "^chore\\(actions", skip = true },
+  { message = "^chore\\(release", skip = true },
+  { message = "^chore", group = "Changed" },
+  { message = "^ci", skip = true },
+  { message = "^build", skip = true },
+  # Breaking changes always surface regardless of type.
+  { body = ".*BREAKING CHANGE.*", group = "Changed" },
+]
+
+# Skip Dependabot / Renovate / merge / release-bump commits.
+filter_commits = true
+
+# Only walk commits since the last tag for incremental runs.
+tag_pattern = "v[0-9]+.*"
+
+# Sort newest-first within each release block.
+sort_commits = "newest"
+
+# Skip merge commits noise.
+ignore_tags = ""
+topo_order = false
