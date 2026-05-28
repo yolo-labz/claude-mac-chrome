@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="cmac-hero-light-title cmac-hero-light-desc">
+  <title id="cmac-hero-light-title">claude-mac-chrome: Chrome multi-profile automation for Claude Code on macOS</title>
+  <desc id="cmac-hero-light-desc">Catppuccin Latte card. Left panel shows the wordmark claude-mac-chrome in mauve over a monospaced tagline. Right panel shows three stacked Chrome browser silhouettes with a fingerprint glyph mapping each silhouette to a distinct stable window ID.</desc>
+  <rect width="1200" height="360" fill="#eff1f5"/>
+  <rect x="0" y="0" width="1200" height="3" fill="#8839ef"/>
+  <g font-family="ui-serif,Georgia,'Iowan Old Style','Apple Garamond',serif" fill="#4c4f69">
+    <text x="72" y="148" font-size="56" font-weight="700" letter-spacing="-2">claude-mac-chrome</text>
+  </g>
+  <g font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace" fill="#6c6f85">
+    <text x="76" y="196" font-size="20">deterministic multi-profile chrome</text>
+    <text x="76" y="224" font-size="20">automation via local state catalog</text>
+  </g>
+  <g font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace" fill="#8c8fa1">
+    <text x="76" y="278" font-size="14">brew install yolo-labz/tap/claude-mac-chrome</text>
+  </g>
+  <g transform="translate(58,300)" fill="none" stroke="#8839ef" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14,0 C6,0 0,6 0,14 V34 C0,42 6,48 14,48 H34 C42,48 48,42 48,34 V14 C48,6 42,0 34,0 Z"/>
+    <path d="M12,24 C12,16 17,11 24,11 C31,11 36,16 36,24 V31 C36,36 32,40 27,40"/>
+    <path d="M19,24 C19,19 21,17 24,17 C27,17 29,19 29,24 V29"/>
+    <path d="M22,28 V38"/>
+  </g>
+  <g transform="translate(720,60)">
+    <g transform="translate(0,0)">
+      <rect x="0" y="0" width="240" height="68" rx="8" ry="8" fill="#e6e9ef" stroke="#8839ef" stroke-width="2"/>
+      <circle cx="18" cy="20" r="5" fill="#d20f39"/>
+      <circle cx="34" cy="20" r="5" fill="#df8e1d"/>
+      <circle cx="50" cy="20" r="5" fill="#40a02b"/>
+      <rect x="72" y="14" width="148" height="12" rx="6" ry="6" fill="#ccd0da"/>
+      <text x="20" y="56" font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace" font-size="11" fill="#1e66f5">Personal — Default</text>
+    </g>
+    <g transform="translate(40,84)">
+      <rect x="0" y="0" width="240" height="68" rx="8" ry="8" fill="#e6e9ef" stroke="#8839ef" stroke-width="2"/>
+      <circle cx="18" cy="20" r="5" fill="#d20f39"/>
+      <circle cx="34" cy="20" r="5" fill="#df8e1d"/>
+      <circle cx="50" cy="20" r="5" fill="#40a02b"/>
+      <rect x="72" y="14" width="148" height="12" rx="6" ry="6" fill="#ccd0da"/>
+      <text x="20" y="56" font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace" font-size="11" fill="#1e66f5">Work — Profile 3</text>
+    </g>
+    <g transform="translate(80,168)">
+      <rect x="0" y="0" width="240" height="68" rx="8" ry="8" fill="#e6e9ef" stroke="#8839ef" stroke-width="2"/>
+      <circle cx="18" cy="20" r="5" fill="#d20f39"/>
+      <circle cx="34" cy="20" r="5" fill="#df8e1d"/>
+      <circle cx="50" cy="20" r="5" fill="#40a02b"/>
+      <rect x="72" y="14" width="148" height="12" rx="6" ry="6" fill="#ccd0da"/>
+      <text x="20" y="56" font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace" font-size="11" fill="#1e66f5">Study — Profile 1</text>
+    </g>
+  </g>
+  <g transform="translate(580,148)" fill="none" stroke="#1e66f5" stroke-width="1.6" opacity="0.55" stroke-linecap="round">
+    <path d="M0,0 C40,-20 100,-60 140,-60"/>
+    <path d="M0,12 C40,12 100,40 140,40"/>
+    <path d="M0,24 C40,40 100,130 140,144"/>
+  </g>
+  <g font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace" fill="#9ca0b0">
+    <text x="1128" y="338" font-size="11" text-anchor="end">yolo-labz/claude-mac-chrome</text>
+  </g>
+</svg>

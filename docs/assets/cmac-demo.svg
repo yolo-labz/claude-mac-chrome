@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" role="img" aria-labelledby="cmac-demo-title cmac-demo-desc">
+  <title id="cmac-demo-title">claude-mac-chrome end-to-end demo flow</title>
+  <desc id="cmac-demo-desc">Three-panel sequence diagram. Panel 1 shows chrome-debug printing a profile catalog table parsed from Local State. Panel 2 shows chrome-multi-profile resolving the Work profile to a stable window ID via fingerprint match. Panel 3 shows a JavaScript round-trip executing in that exact window, returning the page title without z-order drift.</desc>
+  <rect width="1200" height="760" fill="#1e1e2e"/>
+  <rect x="0" y="0" width="1200" height="3" fill="#cba6f7"/>
+
+  <g font-family="ui-serif,Georgia,'Iowan Old Style','Apple Garamond',serif" fill="#cdd6f4">
+    <text x="72" y="56" font-size="22" font-weight="600">end-to-end flow</text>
+  </g>
+  <g font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace" fill="#a6adc8">
+    <text x="72" y="82" font-size="13">three commands · zero hardcoded URLs · zero ordinal indices</text>
+  </g>
+
+  <!-- Panel 1: chrome-debug catalog -->
+  <g transform="translate(72,116)">
+    <rect x="0" y="0" width="1056" height="180" rx="6" ry="6" fill="#181825" stroke="#313244" stroke-width="1"/>
+    <g font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace">
+      <text x="20" y="26" font-size="12" fill="#cba6f7">step 1</text>
+      <text x="80" y="26" font-size="12" fill="#6c7086">dump the profile catalog parsed from Local State JSON</text>
+      <rect x="0" y="40" width="1056" height="1" fill="#313244"/>
+      <text x="20" y="68" font-size="13" fill="#a6adc8">~ $</text>
+      <text x="56" y="68" font-size="13" fill="#cdd6f4">chrome-debug</text>
+      <text x="20" y="98" font-size="12" fill="#6c7086">DIR              NAME            ACCOUNT                              WINDOW_ID</text>
+      <text x="20" y="118" font-size="12" fill="#bac2de">Default          Personal        user.personal@redacted               100000001</text>
+      <text x="20" y="136" font-size="12" fill="#bac2de">Profile 1        Study           user.study@redacted                  100000003</text>
+      <text x="20" y="154" font-size="12" fill="#bac2de">Profile 3        Work            user.work@redacted                   100000004</text>
+    </g>
+  </g>
+
+  <!-- Arrow 1 -->
+  <g transform="translate(596,308)" fill="none" stroke="#cba6f7" stroke-width="1.6" stroke-linecap="round">
+    <path d="M0,0 V18"/>
+    <path d="M-6,12 L0,18 L6,12"/>
+  </g>
+
+  <!-- Panel 2: chrome-multi-profile resolve -->
+  <g transform="translate(72,344)">
+    <rect x="0" y="0" width="1056" height="156" rx="6" ry="6" fill="#181825" stroke="#313244" stroke-width="1"/>
+    <g font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace">
+      <text x="20" y="26" font-size="12" fill="#cba6f7">step 2</text>
+      <text x="80" y="26" font-size="12" fill="#6c7086">resolve a profile by display name; library returns a stable window ID</text>
+      <rect x="0" y="40" width="1056" height="1" fill="#313244"/>
+      <text x="20" y="68" font-size="13" fill="#a6adc8">~ $</text>
+      <text x="56" y="68" font-size="13" fill="#cdd6f4">chrome-multi-profile "Work"</text>
+      <text x="20" y="96" font-size="12" fill="#bac2de">profile=Work  dir=Profile_3  account=user.work@redacted</text>
+      <text x="20" y="114" font-size="12" fill="#bac2de">window_id=100000004  active_tab_id=100000017  fingerprint=verified</text>
+      <text x="20" y="134" font-size="12" fill="#a6e3a1">ok  bound  in  41ms  via  Local State catalog match</text>
+    </g>
+  </g>
+
+  <!-- Arrow 2 -->
+  <g transform="translate(596,512)" fill="none" stroke="#cba6f7" stroke-width="1.6" stroke-linecap="round">
+    <path d="M0,0 V18"/>
+    <path d="M-6,12 L0,18 L6,12"/>
+  </g>
+
+  <!-- Panel 3: JS round-trip -->
+  <g transform="translate(72,548)">
+    <rect x="0" y="0" width="1056" height="164" rx="6" ry="6" fill="#181825" stroke="#313244" stroke-width="1"/>
+    <g font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace">
+      <text x="20" y="26" font-size="12" fill="#cba6f7">step 3</text>
+      <text x="80" y="26" font-size="12" fill="#6c7086">dispatch JS into that exact window via stable AppleScript IDs</text>
+      <rect x="0" y="40" width="1056" height="1" fill="#313244"/>
+      <text x="20" y="68" font-size="13" fill="#a6adc8">~ $</text>
+      <text x="56" y="68" font-size="13" fill="#cdd6f4">chrome-multi-profile "Work" --js "document.title"</text>
+      <text x="20" y="96" font-size="12" fill="#bac2de">window_id=100000004  tab_id=100000017  proto=osascript</text>
+      <text x="20" y="114" font-size="12" fill="#bac2de">js=document.title  bytes=44</text>
+      <text x="20" y="134" font-size="12" fill="#a6e3a1">ok  result="Inbox &#x2014; user.work@redacted &#x2014; Gmail"  latency=63ms</text>
+      <text x="20" y="152" font-size="12" fill="#6c7086">no  z-order  drift   no  ordinal  reshuffle   exact  profile  guaranteed</text>
+    </g>
+  </g>
+
+  <g font-family="ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace" fill="#585b70">
+    <text x="1128" y="738" font-size="11" text-anchor="end">yolo-labz/claude-mac-chrome &#xb7; bench: p50 41 ms &#xb7; p95 89 ms &#xb7; p99 142 ms</text>
+  </g>
+</svg>
