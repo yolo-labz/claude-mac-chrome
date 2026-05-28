@@ -80,7 +80,9 @@ jobs:
 
           # The shellcheck CLI exits non-zero on findings; capture but
           # do not fail the step — SARIF upload is the source of truth.
-          shellcheck --external-sources --format=json1 \
+          # shellcheck-sarif expects `--format=json` (array of comments),
+          # NOT `--format=json1` (object wrapper).
+          shellcheck --external-sources --format=json \
             "${shell_files[@]}" > shellcheck.json || true
 
           shellcheck-sarif < shellcheck.json > shellcheck.sarif
