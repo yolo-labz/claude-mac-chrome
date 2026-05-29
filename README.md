@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/hero-light.svg">
+  <img alt="claude-mac-chrome: deterministic multi-profile Chrome automation on macOS" src="docs/assets/hero-dark.svg">
+</picture>
+
 # claude-mac-chrome
 
 > **Professional Chrome automation for Claude Code on macOS.**
@@ -7,6 +13,42 @@
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-7c3aed.svg)](https://code.claude.com/docs/en/plugins)
 [![macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)]()
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)]()
+
+## Capability
+
+**Pattern.** Multi-profile Chrome automation via Chrome's own `Local State` JSON catalog (canonical profile directory → display name → primary account mapping) combined with AppleScript's stable string IDs for windows and tabs (`id of window w` → `"100000001"`, persistent across z-order reshuffles, tab reorders, and focus changes).
+
+**Trade-off.** macOS-only (AppleScript is the addressing mechanism — no Linux, no Windows by design) in exchange for deterministic profile-to-window resolution at any number of open profiles, without CDP, without launching a throwaway browser context, and without leaking infrastructure into hardcoded URLs.
+
+**Use when.** Claude Code needs to drive a specific Chrome profile (Personal / Work / School / client-specific) without window-ID guesswork — typically when the user has 3+ Chrome profiles open simultaneously and a single misrouted `tell application "Google Chrome"` invocation would send a form from the wrong account.
+
+```bash
+brew install yolo-labz/tap/claude-mac-chrome
+chrome-debug                 # show profile catalog
+chrome-multi-profile "Work"  # focus + interact
+```
+
+## Demo
+
+A non-interactive flow diagram covering the three-step round-trip (catalog dump → profile resolve → JavaScript dispatch via stable AppleScript IDs) is checked in at [`docs/assets/cmac-demo.svg`](./docs/assets/cmac-demo.svg). Open the file directly to inspect the exact CLI output shape; account identifiers in the diagram are anonymized (`user.{personal,work,study}@redacted`).
+
+A live screen-record GIF was deferred for this surface: `claude-mac-chrome` is macOS-only and a faithful recording would require capturing against real signed-in Chrome profiles. The narrative diagram covers the same three commands with no risk of leaking session state or account identifiers. A screen-record asset can be added by a follow-up PR authored on a fresh macOS stealth profile.
+
+## How `claude-mac-chrome` compares
+
+Closest peers in the cross-platform browser-automation ecosystem:
+
+| Capability | `claude-mac-chrome` | [`playwright`](https://playwright.dev/) | [`puppeteer`](https://pptr.dev/) | [`selenium`](https://www.selenium.dev/) |
+|---|:---:|:---:|:---:|:---:|
+| Multi-profile detection via Local State catalog | yes | no (launches new context) | no | no |
+| macOS-native stable AppleScript window IDs | yes | no | no | no |
+| Works against the user's real logged-in Chrome | yes | no (fresh profile) | no (fresh profile) | no (fresh profile) |
+| SLSA L3 signed releases | yes | no | no | no |
+| `bats` + Playwright integration tests | yes | n/a | no | no |
+| Bench gate (>20% p50/p95/p99 regression fails release) | yes | no | no | no |
+| Zero-runtime-dependency install | yes (bash 4.0+) | no (requires Node) | no (requires Node) | no (requires Java) |
+
+For the per-tool deep dive ("why not Playwright / CDP / the official Claude in Chrome extension?") see [§ Comparison with existing tools](#comparison-with-existing-tools).
 
 ## The problem
 
