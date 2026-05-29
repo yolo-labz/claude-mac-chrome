@@ -35,10 +35,17 @@ jobs:
         run: node tests/js-fixtures/run.mjs > /tmp/happy-dom.json
       - name: Run Playwright on same fixtures
         working-directory: tests/integration
+        # list reporter → human-readable failures land in the job log; json
+        # reporter still writes /tmp/playwright.json (via PLAYWRIGHT_JSON_OUTPUT_NAME)
+        # for the Diff envelopes step. The old `> /tmp/playwright.json` redirect
+        # swallowed all failure output, leaving 6 weeks of red runs undiagnosable.
+        # Drop `--with-deps`: unsupported on macOS (Chromium bundles its deps).
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/playwright.json
         run: |
           npm ci
-          npx playwright install --with-deps chromium
-          npx playwright test --grep "parity" --reporter=json > /tmp/playwright.json
+          npx playwright install chromium
+          npx playwright test --grep "parity" --reporter=list,json
       - name: Diff envelopes
         run: node tests/js-fixtures/parity-diff.mjs /tmp/happy-dom.json /tmp/playwright.json
       - name: File or update P1 on divergence
