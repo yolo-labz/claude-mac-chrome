@@ -19,7 +19,10 @@ function emitSafetyJs(selector: string): string {
   const raw = execFileSync("bash", [LIB, "_emit_safety_js", selector], {
     encoding: "utf8",
   });
-  return `window.__cmc_envelope = ${raw.trim()};`;
+  // _emit_safety_js returns JSON.stringify(envelope) (the lib's wire contract),
+  // so parse it back into an object — otherwise window.__cmc_envelope is a string
+  // and envelope.ok reads `undefined`, failing every assertion below.
+  return `window.__cmc_envelope = JSON.parse(${raw.trim()});`;
 }
 
 test("positive: Gmail mark-read dispatches and sentinel flips", async ({
