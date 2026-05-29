@@ -19,6 +19,9 @@ function emitSafetyJs(selector: string): string {
   const raw = execFileSync("bash", [LIB, "_emit_safety_js", selector], {
     encoding: "utf8",
   });
+  // _emit_safety_js emits a self-invoking expr that returns JSON.stringify(envelope)
+  // — the lib's wire contract. Inject it verbatim; callers JSON.parse the string
+  // (parsing here would wrap the trailing-`;` expr as `JSON.parse(...;)` → syntax error).
   return `window.__cmc_envelope = ${raw.trim()};`;
 }
 
@@ -27,7 +30,9 @@ test("positive: Gmail mark-read dispatches and sentinel flips", async ({
 }) => {
   await page.goto("/15-safe-gmail-mark-read.html");
   await page.addScriptTag({ content: emitSafetyJs("#target") });
-  const envelope = await page.evaluate(() => (window as any).__cmc_envelope);
+  const envelope = JSON.parse(
+    await page.evaluate(() => (window as any).__cmc_envelope),
+  );
 
   expect(envelope.element_found).toBe(true);
   expect(envelope.ok).toBe(true);
@@ -48,8 +53,8 @@ test("parity: positive fixture envelope matches happy-dom run", async ({
   // Run Chromium envelope
   await page.goto("/15-safe-gmail-mark-read.html");
   await page.addScriptTag({ content: emitSafetyJs("#target") });
-  const chromiumEnvelope = await page.evaluate(
-    () => (window as any).__cmc_envelope,
+  const chromiumEnvelope = JSON.parse(
+    await page.evaluate(() => (window as any).__cmc_envelope),
   );
 
   // Run happy-dom envelope via the harness
