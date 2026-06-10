@@ -1844,6 +1844,31 @@ _chrome_safety_check_js() {
       return JSON.stringify(result);
     }
 
+    // Clickjack hit-test (gauntlet layer 11, NFR-V2-SAFETY-1): elementFromPoint
+    // at the target's center must resolve to the target or one of its own nodes.
+    // A foreign element painted on top (transparent overlay, z-index trap) means
+    // the click would land elsewhere — block it. happy-dom has no layout engine
+    // and returns null here, so this rail is inert under the JS-fixture harness;
+    // fixture 07 is authoritative under real Chromium (clickjack.spec.ts). An
+    // ancestor resolving at the point (imprecise hit-test / wrapping container)
+    // is not a foreign overlay, so hit.contains(el) is treated as safe.
+    const _cx = rect.left + rect.width / 2;
+    const _cy = rect.top + rect.height / 2;
+    const hit = (_cx >= 0 && _cy >= 0 && _cx < window.innerWidth && _cy < window.innerHeight)
+      ? document.elementFromPoint(_cx, _cy)
+      : null;
+    if (hit) {
+      _fire("hit_test");
+      if (hit !== el && !el.contains(hit) && !hit.contains(el)) {
+        result.blocked_reason = "clickjack_suspected";
+        result.evidence = {
+          hit_target_id: hit.id || (hit.tagName ? hit.tagName.toLowerCase() : "null"),
+          intended_target_id: el.id || ""
+        };
+        return JSON.stringify(result);
+      }
+    }
+
     // TOCTOU fingerprint (NFR-SR-V2-TOCTOU): lock the element's outerHTML hash
     // and bounding-rect snapshot so the dispatch step can detect DOM mutation
     // between safety-pass and click. FNV-1a 32-bit — integrity signal, not
