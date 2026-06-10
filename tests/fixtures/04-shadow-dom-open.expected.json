@@ -10,5 +10,6 @@
   "fired_rail_trace": ["element_lookup", "ancestor_text_walk"],
   "selector": "#host",
   "variant_group": "purchase_button_text",
-  "note": "Observed behavior: happy-dom's shadow-root textContent aggregation surfaces 'Upgrade' via the parent body at depth 1, not the host itself at depth 0. The rail still fires — the point is defense-in-depth, not the exact depth."
+  "harness_requirement": "integration_only",
+  "note": "The shadow root is built by an inline <script>. The happy-dom harness sets documentElement.innerHTML, which per the HTML spec does not execute scripts, so the shadow DOM never exists there and gatherAllText has nothing to descend into. (The pre-2026-06 happy-dom 'pass' was a false positive: the lexicon matched the SOURCE text of that inline script, not real shadow content — see chrome-lib.sh _visibleishText.) Now Chromium-authoritative, verified by tests/integration/shadow-dom.spec.ts, which asserts the purchase_button_text family rather than a fixed depth."
 }
