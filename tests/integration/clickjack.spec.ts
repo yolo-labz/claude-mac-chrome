@@ -28,7 +28,9 @@ function emitSafetyJs(selector: string): string {
 async function runSafetyCheck(page: any, selector: string): Promise<any> {
   const content = emitSafetyJs(selector);
   await page.addScriptTag({ content });
-  const envelope = await page.evaluate(() => (window as any).__cmc_envelope);
+  const envelope = JSON.parse(
+    await page.evaluate(() => (window as any).__cmc_envelope),
+  );
   return typeof envelope === "string" ? JSON.parse(envelope) : envelope;
 }
 

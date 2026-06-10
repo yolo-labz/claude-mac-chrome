@@ -26,7 +26,9 @@ test("dialog: button inside dialog without open attr is inert-blocked", async ({
 }) => {
   await page.goto("/06-inert-ancestor.html");
   await page.addScriptTag({ content: emitSafetyJs("#target") });
-  const envelope = await page.evaluate(() => (window as any).__cmc_envelope);
+  const envelope = JSON.parse(
+    await page.evaluate(() => (window as any).__cmc_envelope),
+  );
   expect(envelope.element_found).toBe(true);
   expect(envelope.ok).toBe(false);
   expect(envelope.blocked_reason).toBe("inert_container");
