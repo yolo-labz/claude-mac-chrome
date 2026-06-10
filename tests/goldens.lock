@@ -4,5 +4,5 @@
 #
 # Regenerate with: scripts/regenerate-goldens.sh
 
-safety_js_sha256=31d87b1dd729d0e93260bf08b8ef503d500aaed9d18c83a3084ebb236cf0ccd9
+safety_js_sha256=47e4bd73bd34f83529cb395ce851418d78f12f2eee2400e1ee91fc200ec5fb19
 safety_js_selector_stub=#target

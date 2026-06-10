@@ -10,5 +10,6 @@
   "fired_rail_trace": ["element_lookup", "ancestor_text_walk"],
   "selector": "#outer-host",
   "variant_group": "purchase_button_text",
-  "note": "Nested shadow root text surfaces via parent body at depth 1, same observed behavior pattern as fixture 04."
+  "harness_requirement": "integration_only",
+  "note": "Two nested shadow roots built by an inline <script>. The happy-dom harness does not execute scripts (innerHTML assignment), so neither shadow root exists there. Same situation as fixture 04: the old happy-dom 'pass' matched inline-script source text, not real shadow content. Now Chromium-authoritative, verified by tests/integration/shadow-dom.spec.ts (asserts the purchase_button_text family, not a fixed depth)."
 }

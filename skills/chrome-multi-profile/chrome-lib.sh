@@ -1734,10 +1734,32 @@ _chrome_safety_check_js() {
 
     // Gather text from: textContent UNION innerText UNION shadow DOM UNION ::before/::after
     // NFR-SR-V2-7, NFR-SR-V2-8, NFR-SR-V2-9.
+    // textContent is collected via a TreeWalker that skips script/style/
+    // noscript/template subtrees: raw textContent at <body>/<html> depth
+    // swallows inline <script> source, and ubiquitous strings like
+    // "checkout" inside page JS would false-positive the lexicon. Hidden
+    // text (display:none labels) still counts — only code/style text is out.
+    function _visibleishText(root) {
+      try {
+        const SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1 };
+        const out = [];
+        (function walk(n, d) {
+          if (!n || d > 40 || out.length > 2000) return;
+          if (n.nodeType === 3) { out.push(n.nodeValue || ""); return; }
+          const tag = n.tagName ? String(n.tagName).toUpperCase() : "";
+          if (SKIP[tag]) return;
+          const kids = n.childNodes || [];
+          for (let i = 0; i < kids.length; i++) walk(kids[i], d + 1);
+        })(root, 0);
+        return out.join(" ");
+      } catch (_) {
+        try { return root.textContent || ""; } catch (_) { return ""; }
+      }
+    }
     function gatherAllText(node, depth) {
       if (!node || depth > 10) return "";
       let parts = [];
-      try { parts.push(node.textContent || ""); } catch(_) {}
+      try { parts.push(_visibleishText(node)); } catch(_) {}
       try { parts.push(node.innerText || ""); } catch(_) {}
       // CSS pseudo-element content
       try {
