@@ -19,7 +19,7 @@ function emitSafetyJs(selector: string): string {
 
 async function runSafetyCheck(page: any, selector: string): Promise<any> {
   await page.addScriptTag({ content: emitSafetyJs(selector) });
-  return page.evaluate(() => (window as any).__cmc_envelope);
+  return JSON.parse(await page.evaluate(() => (window as any).__cmc_envelope));
 }
 
 test("visibility: zero-dimensions button blocked", async ({ page }) => {

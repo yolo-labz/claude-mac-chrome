@@ -26,7 +26,9 @@ test("pseudo: ::before content 'Subscribe' caught via getComputedStyle", async (
 }) => {
   await page.goto("/05-pseudo-before-content.html");
   await page.addScriptTag({ content: emitSafetyJs("#target") });
-  const envelope = await page.evaluate(() => (window as any).__cmc_envelope);
+  const envelope = JSON.parse(
+    await page.evaluate(() => (window as any).__cmc_envelope),
+  );
   expect(envelope.element_found).toBe(true);
   expect(envelope.ok).toBe(false);
   expect(envelope.blocked_reason).toMatch(/^purchase_button_text_depth_/);
