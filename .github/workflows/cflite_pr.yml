@@ -16,25 +16,34 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    continue-on-error: true
     steps:
       - name: Build fuzzers
-        id: build
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: javascript
-          # Our three fuzz targets are thin wrappers generated at compile
-          # time from build.sh; they do not sit one-to-one against a
-          # source file CFL's affected-detection can match. Without this
-          # flag `mode: code-change` deletes ALL targets on any PR that
-          # does not touch tests/fuzz/**, which permanently breaks the
-          # build with "No fuzz targets found in out dir" (#50).
+          # Build-only by design (#75). Our three targets
+          # (radamsa-urls.sh, html-grammar.mjs, unicode-confusables.mjs)
+          # are differential/grammar drivers, NOT libFuzzer/Jazzer
+          # binaries. Under FUZZING_ENGINE=libfuzzer, CFL's
+          # `find_fuzz_targets` requires the `LLVMFuzzerTestOneInput` magic
+          # string AND edge-coverage instrumentation; our thin shell/node
+          # wrappers have neither, so it returns "No fuzz targets found" —
+          # which broke BOTH the post-build `check_build` AND `run_fuzzers`
+          # on every run since this workflow existed (previously masked by
+          # continue-on-error). So we:
+          #   - skip the libFuzzer build validation (bad-build-check),
+          #   - run NO `run_fuzzers` step (nothing is libFuzzer-runnable;
+          #     forcing detection would only feed the wrappers libFuzzer
+          #     args they ignore, producing no real coverage). The real
+          #     coverage run is the nightly radamsa harness in fuzz.yml.
+          # This step still genuinely validates that
+          # .clusterfuzzlite/{Dockerfile,build.sh} compile and emit the
+          # harness — so it stays HONESTLY green (no continue-on-error).
+          # Scorecard's Fuzzing check keys on .clusterfuzzlite/Dockerfile
+          # presence, NOT on this workflow, so build-only keeps 10/10.
+          bad-build-check: false
+          # Build all three targets regardless of which files the PR
+          # touched. Without this, CFL's affected-target detection prunes
+          # the compile-time-generated wrappers to an empty $OUT on any PR
+          # that doesn't touch tests/fuzz/** (#50).
           keep-unaffected-fuzz-targets: true
-      - name: Run fuzzers
-        id: run
-        if: steps.build.outcome == 'success'
-        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          fuzz-seconds: 120
-          mode: code-change

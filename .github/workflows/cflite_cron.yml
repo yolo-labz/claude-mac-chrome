@@ -13,19 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
-    continue-on-error: true
     steps:
       - name: Build fuzzers
-        id: build
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: javascript
-      - name: Run fuzzers
-        id: run
-        if: steps.build.outcome == 'success'
-        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          fuzz-seconds: 600
-          mode: batch
+          # Build-only by design (#75) — same rationale as cflite_pr.yml:
+          # our targets are differential/grammar drivers, not
+          # libFuzzer/Jazzer binaries, so CFL can build them but cannot
+          # run them ("No fuzz targets found"). The `run_fuzzers` step is
+          # therefore removed; the real coverage run is the nightly
+          # radamsa harness in fuzz.yml. This nightly build is kept as an
+          # early-warning canary for drift in CFL's mutable `:v1` runner
+          # base image — it goes HONESTLY red (no continue-on-error) if
+          # the CFL build path ever breaks. Scorecard Fuzzing credit keys
+          # on .clusterfuzzlite/Dockerfile presence, not this workflow.
+          bad-build-check: false
