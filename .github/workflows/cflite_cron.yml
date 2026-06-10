@@ -21,6 +21,13 @@ jobs:
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: javascript
+          # Skip OSS-Fuzz `check_build` (#75) — same rationale as
+          # cflite_pr.yml: our targets are differential/grammar drivers,
+          # not libFuzzer/Jazzer binaries, so `find_fuzz_targets` rejects
+          # them ("No fuzz targets found"). CFL presence earns the
+          # Scorecard Fuzzing credit; real coverage is the nightly
+          # fuzz.yml. See cflite_pr.yml for the full explanation.
+          bad-build-check: false
       - name: Run fuzzers
         id: run
         if: steps.build.outcome == 'success'
