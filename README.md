@@ -30,9 +30,14 @@ chrome-multi-profile "Work"  # focus + interact
 
 ## Demo
 
-A non-interactive flow diagram covering the three-step round-trip (catalog dump → profile resolve → JavaScript dispatch via stable AppleScript IDs) is checked in at [`docs/assets/cmac-demo.svg`](./docs/assets/cmac-demo.svg). Open the file directly to inspect the exact CLI output shape; account identifiers in the diagram are anonymized (`user.{personal,work,study}@redacted`).
+The [flow illustration](docs/assets/cmac-demo.svg) shows source-checked
+`chrome-lib.sh` commands, **not recorded output or a latency benchmark**. The old
+illustration's `chrome-multi-profile … --js` syntax and invented 41/63 ms output
+were not the library's CLI contract and have been removed.
 
-A live screen-record GIF was deferred for this surface: `claude-mac-chrome` is macOS-only and a faithful recording would require capturing against real signed-in Chrome profiles. The narrative diagram covers the same three commands with no risk of leaking session state or account identifiers. A screen-record asset can be added by a follow-up PR authored on a fresh macOS stealth profile.
+A live AppleScript capture remains gated on an isolated macOS user/session.
+**Real signed-in accounts are not required**: use a disposable Chrome profile and
+local synthetic page. See [provenance and capture procedure](docs/MEDIA.md).
 
 ## How `claude-mac-chrome` compares
 
