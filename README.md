@@ -1,13 +1,19 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/hero-light.svg">
-  <img alt="claude-mac-chrome: deterministic multi-profile Chrome automation on macOS" src="docs/assets/hero-dark.svg">
+  <img alt="claude-mac-chrome: deterministic multi-profile Chrome automation on macOS" src="docs/assets/hero-dark.svg" width="640">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yolo-labz/.github/main/profile/assets/brand/logo-mark-dark.svg">
+  <img src="https://raw.githubusercontent.com/yolo-labz/.github/main/profile/assets/brand/logo-mark-light.svg" alt="yolo-labz" width="48">
 </picture>
 
 # claude-mac-chrome
 
-> **Professional Chrome automation for Claude Code on macOS.**
-> Deterministic multi-profile detection via Chrome's own authoritative profile catalog, combined with stable window/tab IDs that don't drift. Zero user configuration. Zero URL heuristics. Zero dependencies.
+> Address Chrome profiles and tabs from macOS scripts without relying on window order.
+>
+> macOS only, visible Chrome, Bash 4+, jq, Python 3 and Apple Events/JavaScript permissions required. Profile detection reads Chrome's own `Local State` catalog and matching uses several signals and fallbacks, including URL overlap; stable window/tab IDs last for the lifetime of the window or tab, not across a restart.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-7c3aed.svg)](https://code.claude.com/docs/en/plugins)
@@ -112,7 +118,7 @@ Combined:
   └──────────────────────────────────────────────────────────────┘
 ```
 
-Deterministic. Zero user configuration. Zero hardcoded URLs. Zero leaked personal infrastructure in the codebase.
+Deterministic profile-to-window resolution, with no hardcoded URLs and no personal infrastructure in the codebase.
 
 ## Stable ID addressing
 
@@ -445,6 +451,5 @@ The insight that Chrome's own `Local State` file can serve as an authoritative p
 
 ---
 
-## Services
-
-Compliance-grade AI architecture for regulated workloads — async-first, USD-denominated, LATAM-based / EN-fluent. See [blog.home301server.com.br/services](https://blog.home301server.com.br/services/).
+Part of **[yolo-labz](https://github.com/yolo-labz)** — small tools, deliberate automation.
+[Org profile](https://github.com/yolo-labz) · [All repositories](https://github.com/orgs/yolo-labz/repositories) · [Engineering notes](https://blog.home301server.com.br)
