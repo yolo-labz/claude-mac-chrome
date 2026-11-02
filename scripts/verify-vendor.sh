@@ -74,7 +74,16 @@ tar xzf src.tar.gz
 cd "happy-dom-$commit/packages/happy-dom"
 
 echo "Building deterministic bundle..."
-npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts --silent
+# Lockfile-only install: this script is the authoritative defence against
+# supply-chain drift, so an unpinned `npm install` fallback (which resolves
+# whatever versions the registry serves today) has no place in it. If upstream's
+# source tarball has no lockfile, fail loudly instead of installing something
+# unverifiable.
+if [[ ! -f package-lock.json ]]; then
+  echo "FATAL: upstream tarball has no package-lock.json — refusing an unverifiable install"
+  exit 1
+fi
+npm ci --ignore-scripts --no-audit --no-fund
 SOURCE_DATE_EPOCH=1700000000 \
   ./node_modules/.bin/esbuild --bundle src/index.ts \
   --format=esm \
