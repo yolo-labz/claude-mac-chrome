@@ -33,3 +33,7 @@ updates:
       - "dependencies"
       - "playwright"
     open-pull-requests-limit: 3
+    # Routine bumps arrive as one PR; a major arrives alone, for review.
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
