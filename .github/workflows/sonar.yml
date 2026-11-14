@@ -33,6 +33,38 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
+      # SonarQube origin hardening (SONAR-ORIGIN, 13/11/2026): every cold scan pulls ~220 MB (scanner JRE,
+      # engine, analyzer plugins) from the home-hosted server and the large downloads get cut. Cache them, and
+      # install the scanner CLI ourselves with bounded, checksum-pinned downloads so the action never runs its
+      # unbounded `gpg --recv-keys` (the keyserver hang that ran into the job timeout).
+      # ponytail: sha256 below is the action's own linux-x64 pin for scanner 8.3.1.16491 (sonar-scanner-version at
+      # v8.4.1); bump both together with the action.
+      - name: Cache scanner JRE, engine and plugins
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.sonar/cache
+          key: sonar-scanner-${{ runner.os }}-${{ hashFiles('.github/workflows/sonar.yml') }}
+          restore-keys: sonar-scanner-${{ runner.os }}-
+      - name: Pre-install SonarScanner CLI (bounded, checksum-pinned)
+        if: steps.check.outputs.skip == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          v=8.3.1.16491
+          sha=0f304e4c5982f0cfbd06762306d6e60e6ed9c8e3853629ae3b8ec2f4dc9bdc04
+          dir="$RUNNER_TOOL_CACHE/sonar-scanner-cli/8.3.1-build.16491/linux-x64"
+          if [ ! -f "$dir.complete" ]; then
+            zip="$RUNNER_TEMP/sonar-scanner-cli.zip"
+            curl -fsSL --retry 4 --retry-all-errors --connect-timeout 20 --max-time 150 -o "$zip" \
+              "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$v-linux-x64.zip"
+            echo "$sha  $zip" | sha256sum -c -
+            rm -rf "$RUNNER_TEMP/sonar-unzip" "$dir"
+            unzip -q "$zip" -d "$RUNNER_TEMP/sonar-unzip"
+            mkdir -p "$dir"
+            cp -a "$RUNNER_TEMP/sonar-unzip/sonar-scanner-$v-linux-x64/." "$dir/"
+            touch "$dir.complete"
+          fi
       - name: SonarQube scan
         if: steps.check.outputs.skip == 'false'
         uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
