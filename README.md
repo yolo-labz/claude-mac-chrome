@@ -1,12 +1,9 @@
+<img src="https://raw.githubusercontent.com/yolo-labz/.github/96969d2591eae5b32c6f6e67a0812f2bca3085bd/profile/assets/brand/repo-headers/claude-mac-chrome.png" alt="claude-mac-chrome: Address Chrome profiles and tabs from macOS scripts without relying on window order." width="100%">
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/hero-light.svg">
   <img alt="claude-mac-chrome: deterministic multi-profile Chrome automation on macOS" src="docs/assets/hero-dark.svg" width="640">
-</picture>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yolo-labz/.github/main/profile/assets/brand/logo-mark-dark.svg">
-  <img src="https://raw.githubusercontent.com/yolo-labz/.github/main/profile/assets/brand/logo-mark-light.svg" alt="yolo-labz" width="48">
 </picture>
 
 # claude-mac-chrome
